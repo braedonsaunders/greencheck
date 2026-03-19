@@ -11,8 +11,7 @@
 <p align="center">
   <a href="#quickstart">Quickstart</a> |
   <a href="#how-it-works">How It Works</a> |
-  <a href="#configuration">Configuration</a> |
-  <a href="./SPEC.md">Design Spec</a>
+  <a href="#configuration">Configuration</a>
 </p>
 
 ## Status
@@ -156,10 +155,6 @@ npm run lint
 npm run typecheck
 npm run build
 ```
-
-## Design Spec
-
-[`SPEC.md`](./SPEC.md) is the longer-form product and architecture document. Treat it as a design target, not a line-by-line guarantee of the current implementation.
 
 ## License
 
