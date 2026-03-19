@@ -16,9 +16,9 @@
 
 ## What It Does
 
-`greencheck` listens for failed GitHub Actions runs, reads the failing logs, asks Claude Code or Codex for a targeted fix, commits the change, and waits for CI to run again.
+`greencheck` watches failed GitHub Actions runs, turns the logs into structured failures, asks Claude Code or Codex for a targeted fix, commits the patch, and waits for CI to run again.
 
-It is built for `workflow_run`-based remediation flows and includes:
+It is designed for `workflow_run`-based remediation flows and includes:
 
 - log parsing for ESLint/Biome, TypeScript, Jest/Vitest, Pytest, Go, and Rust output
 - scoped commits with out-of-scope edit filtering
@@ -72,9 +72,9 @@ For Claude Code, you can use OAuth instead of an API key:
           trigger-token: ${{ secrets.GREENCHECK_TOKEN }}
 ```
 
-For Codex in CI, use `agent-api-key`. The current action does not support OAuth-only Codex auth.
+For Codex in CI, use `agent-api-key`. Codex OAuth-only auth is not supported in this action.
 
-The full example workflow lives at `examples/greencheck.workflow.yml`. This action repository intentionally does not keep example files under `.github/workflows`, because published Marketplace action repositories must not contain workflow files.
+A complete example workflow lives at `examples/greencheck.workflow.yml`.
 
 ## How It Works
 
@@ -89,7 +89,7 @@ The action also refuses to operate on stale logs. If the branch has advanced sin
 
 ## Configuration
 
-Repository config lives in `.greencheck.yml`. Explicit action inputs override repository config. If an input is omitted, the repo config can supply it.
+You can also configure `greencheck` with a `.greencheck.yml` file. Explicit action inputs override repository config values.
 
 ```yaml
 watch:
@@ -138,30 +138,17 @@ safety:
 | `fix-types` | comma-separated failure types or `all` |
 | `model` | override agent model |
 | `dry-run` | parse and report only, do not push |
-| `config-path` | repository config path |
-| `workflow-run-id` | optional run id override for local testing |
+| `config-path` | custom path to `.greencheck.yml` |
+| `workflow-run-id` | advanced workflow run override for troubleshooting |
 
-## Safety Notes
+## Guardrails
 
-- The action only supports `workflow_run` today.
+- The action is designed for `workflow_run` automation.
 - It skips stale failure contexts when the branch moved after the failed run.
 - It filters out protected files before commit.
-- Auto-merge is opt-in and still basic: label + approval + branch guardrails.
+- Auto-merge is optional and can be gated by labels, approvals, and protected-branch patterns.
 
-## Publishing
-
-This repository is structured to be publishable as a GitHub Action:
-
-- `action.yml` is at the repository root.
-- consumer workflow examples live in `examples/`, not `.github/workflows/`.
-
-To publish it:
-
-1. Push a version tag such as `v0.1.0` and a moving major tag such as `v0`.
-2. Open `action.yml` in the GitHub web UI.
-3. Draft a release from the version tag and select the GitHub Marketplace publish option.
-
-## Development
+## Local Development
 
 ```bash
 npm install
