@@ -74,6 +74,8 @@ For Claude Code, you can use OAuth instead of an API key:
 
 For Codex in CI, use `agent-api-key`. The current action does not support OAuth-only Codex auth.
 
+The full example workflow lives at `examples/greencheck.workflow.yml`. This action repository intentionally does not keep example files under `.github/workflows`, because published Marketplace action repositories must not contain workflow files.
+
 ## How It Works
 
 1. A monitored workflow finishes with `failure`.
@@ -145,6 +147,19 @@ safety:
 - It skips stale failure contexts when the branch moved after the failed run.
 - It filters out protected files before commit.
 - Auto-merge is opt-in and still basic: label + approval + branch guardrails.
+
+## Publishing
+
+This repository is structured to be publishable as a GitHub Action:
+
+- `action.yml` is at the repository root.
+- consumer workflow examples live in `examples/`, not `.github/workflows/`.
+
+To publish it:
+
+1. Push a version tag such as `v0.1.0` and a moving major tag such as `v0`.
+2. Open `action.yml` in the GitHub web UI.
+3. Draft a release from the version tag and select the GitHub Marketplace publish option.
 
 ## Development
 
