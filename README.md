@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="logo.png" alt="greencheck banner" width="100%" />
+  <img src="./logo.png" alt="greencheck banner" width="100%" />
 </p>
 
 <h1 align="center">greencheck</h1>
