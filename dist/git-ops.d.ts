@@ -1,0 +1,10 @@
+import { FailureCluster, GreenCheckConfig } from './types';
+export declare function checkoutBranch(branch: string, cwd?: string): Promise<void>;
+export declare function pullLatest(branch: string, cwd?: string): Promise<void>;
+export declare function getChangedFiles(cwd?: string): Promise<string[]>;
+export declare function commitFix(cluster: FailureCluster, passNumber: number, config: GreenCheckConfig, cwd?: string): Promise<string | null>;
+export declare function pushChanges(branch: string, token: string, owner: string, repo: string, cwd?: string): Promise<boolean>;
+export declare function revertCommit(sha: string, cwd?: string): Promise<boolean>;
+export declare function discardChangesForFiles(files: string[], cwd?: string): Promise<void>;
+export declare function discardAllChanges(cwd?: string): Promise<void>;
+export declare function getCurrentSha(cwd?: string): Promise<string>;

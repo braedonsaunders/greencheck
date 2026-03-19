@@ -1,0 +1,39 @@
+# Example: copy this file to .github/workflows/greencheck.yml
+
+name: greencheck
+
+on:
+  workflow_run:
+    workflows: ["CI", "Tests", "Lint", "Build"]
+    types: [completed]
+
+permissions:
+  actions: read
+  contents: write
+  issues: write
+  pull-requests: write
+  checks: read
+
+jobs:
+  fix:
+    if: ${{ github.event.workflow_run.conclusion == 'failure' }}
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.workflow_run.head_sha }}
+          fetch-depth: 0
+          token: ${{ secrets.GREENCHECK_TOKEN }}
+
+      - name: Run greencheck
+        uses: braedonsaunders/greencheck@v0
+        with:
+          agent: claude
+          agent-api-key: ${{ secrets.ANTHROPIC_API_KEY }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          trigger-token: ${{ secrets.GREENCHECK_TOKEN }}
+          max-passes: 5
+          max-cost: "$3.00"
+          timeout: 20m

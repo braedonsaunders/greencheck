@@ -1,0 +1,72 @@
+name: 'greencheck'
+description: 'Autonomously fix failed GitHub Actions runs with Claude Code or Codex.'
+author: 'Braedon Saunders'
+
+branding:
+  icon: 'check-circle'
+  color: 'green'
+
+inputs:
+  agent:
+    description: 'CLI agent to use: claude or codex'
+    required: false
+  agent-api-key:
+    description: 'API key for the selected agent'
+    required: false
+  agent-oauth-token:
+    description: 'OAuth token for Claude Code (alternative to agent-api-key)'
+    required: false
+  github-token:
+    description: 'GitHub token with actions:read and issue/PR comment write permissions'
+    required: true
+  trigger-token:
+    description: 'PAT or GitHub App token used for push and rerun operations'
+    required: true
+  max-passes:
+    description: 'Maximum fix/verify cycles before giving up'
+    required: false
+  max-cost:
+    description: 'Hard spend limit per run, for example $3.00'
+    required: false
+  timeout:
+    description: 'Total wall-clock budget, for example 20m'
+    required: false
+  auto-merge:
+    description: 'Enable auto-merge after green CI'
+    required: false
+  watch-workflows:
+    description: 'Comma-separated workflow names to monitor; omit or use all to watch every workflow'
+    required: false
+  fix-types:
+    description: 'Failure types to fix: lint, type-error, test-failure, build-error, runtime-error, or all'
+    required: false
+  model:
+    description: 'Override the default model for the selected agent'
+    required: false
+  dry-run:
+    description: 'Diagnose and report without pushing fixes'
+    required: false
+  config-path:
+    description: 'Path to the repository .greencheck.yml file'
+    required: false
+  workflow-run-id:
+    description: 'Optional workflow run id override for local testing'
+    required: false
+
+outputs:
+  fixed:
+    description: 'Whether CI was fixed (true/false)'
+  passes:
+    description: 'Number of fix/verify cycles used'
+  failures-found:
+    description: 'Number of failures detected'
+  failures-fixed:
+    description: 'Number of failures resolved'
+  commits:
+    description: 'Comma-separated list of fix commit SHAs'
+  cost:
+    description: 'Estimated LLM API cost for this run'
+
+runs:
+  using: 'node20'
+  main: 'dist/index.js'

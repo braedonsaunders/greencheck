@@ -1,0 +1,10 @@
+import * as github from '@actions/github';
+import { GreenCheckConfig, RunState } from './types';
+type Octokit = ReturnType<typeof github.getOctokit>;
+declare function buildPRCommentBody(state: RunState): string;
+declare function buildJobSummary(state: RunState): string;
+export declare function postPRComment(octokit: Octokit, owner: string, repo: string, prNumber: number, state: RunState): Promise<void>;
+export declare function writeJobSummary(state: RunState): Promise<void>;
+export declare function sendSlackNotification(webhookUrl: string, state: RunState): Promise<void>;
+export declare function report(octokit: Octokit, owner: string, repo: string, state: RunState, config: GreenCheckConfig): Promise<void>;
+export { buildJobSummary, buildPRCommentBody };

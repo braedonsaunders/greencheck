@@ -1,0 +1,4 @@
+node_modules/
+.greencheck/
+*.log
+.env*
