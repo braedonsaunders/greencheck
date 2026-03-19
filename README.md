@@ -252,18 +252,6 @@ greencheck is paranoid by default.
 
 ---
 
-## Roadmap
-
-- [x] Spec & architecture
-- [ ] v0.1 — Log parsing (ESLint, tsc, Jest), single-pass fix
-- [ ] v0.2 — Multi-pass loop, regression detection, revert
-- [ ] v0.3 — More parsers (pytest, Go, Rust), deterministic-first
-- [ ] v0.4 — Auto-merge with safety guardrails
-- [ ] v0.5 — Slack integration, dashboard, badges
-- [ ] v1.0 — Public launch
-
----
-
 ## Contributing
 
 greencheck is in early development. If you want to help build the CI guardian the world deserves, open an issue or PR.
