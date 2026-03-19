@@ -14,16 +14,16 @@
   <a href="#configuration">Configuration</a>
 </p>
 
-## Status
+## What It Does
 
-This repository now builds cleanly, has passing tests, and ships a generated `dist/` bundle. The current implementation supports:
+`greencheck` listens for failed GitHub Actions runs, reads the failing logs, asks Claude Code or Codex for a targeted fix, commits the change, and waits for CI to run again.
 
-- `workflow_run` triggers for failed GitHub Actions workflows
+It is built for `workflow_run`-based remediation flows and includes:
+
 - log parsing for ESLint/Biome, TypeScript, Jest/Vitest, Pytest, Go, and Rust output
-- Claude Code and Codex CLI invocation
-- scoped commits, out-of-scope file filtering, regression reverts, PR comments, and job summaries
-
-It does not currently support `check_suite` or `issue_comment` triggers.
+- scoped commits with out-of-scope edit filtering
+- regression detection and revert handling
+- PR comments and GitHub Actions job summaries
 
 ## Quickstart
 
