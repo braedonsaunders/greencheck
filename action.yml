@@ -1,4 +1,4 @@
-name: 'greencheck'
+name: 'Greencheck CI Fixer'
 description: 'Autonomously fix failed GitHub Actions runs with Claude Code or Codex.'
 author: 'Braedon Saunders'
 
