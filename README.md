@@ -19,6 +19,7 @@
   <a href="#how-it-works">How It Works</a> ·
   <a href="#configuration">Configuration</a> ·
   <a href="#supported-languages">Languages</a> ·
+  <a href="AGENTS.md">Agent Setup Guide</a> ·
   <a href="CONTRIBUTING.md">Contributing</a>
 </p>
 
@@ -249,6 +250,10 @@ greencheck auto-installs Claude Code or Codex via `npm install -g`. If this fail
 
 **No failures found in logs**
 The CI log format may not match any parser. [Open an issue](https://github.com/braedonsaunders/greencheck/issues/new?template=bug_report.yml) with the log snippet and we'll add support.
+
+## Agent Setup Guide
+
+Using an AI coding agent (Claude Code, Codex, Cursor, etc.) to set up greencheck in a repo? See **[AGENTS.md](AGENTS.md)** — a structured reference designed for LLM agents with step-by-step installation instructions, all inputs/outputs, common patterns, and troubleshooting.
 
 ## License
 
