@@ -19,7 +19,7 @@
   <a href="#how-it-works">How It Works</a> ·
   <a href="#configuration">Configuration</a> ·
   <a href="#supported-languages">Languages</a> ·
-  <a href="AGENTS.md">Agent Setup Guide</a> ·
+  <a href="SKILL.md">Agent Skill</a> ·
   <a href="CONTRIBUTING.md">Contributing</a>
 </p>
 
@@ -251,9 +251,9 @@ greencheck auto-installs Claude Code or Codex via `npm install -g`. If this fail
 **No failures found in logs**
 The CI log format may not match any parser. [Open an issue](https://github.com/braedonsaunders/greencheck/issues/new?template=bug_report.yml) with the log snippet and we'll add support.
 
-## Agent Setup Guide
+## Agent Skill
 
-Using an AI coding agent (Claude Code, Codex, Cursor, etc.) to set up greencheck in a repo? See **[AGENTS.md](AGENTS.md)** — a structured reference designed for LLM agents with step-by-step installation instructions, all inputs/outputs, common patterns, and troubleshooting.
+Using an AI coding agent to set up greencheck? **[SKILL.md](SKILL.md)** is a procedural skill file that any LLM agent (Claude Code, Codex, Cursor, OpenCode, etc.) can load and execute step-by-step to install and configure greencheck in any repository. It includes trigger conditions, numbered steps, all inputs/outputs, and a pitfalls section.
 
 ## License
 
