@@ -57,4 +57,47 @@ all tests passed
     `;
     expect(parseEslint(log)).toHaveLength(0);
   });
+
+  it('only captures errors, not warnings', () => {
+    const log = `
+src/a.ts:1:1: warning Unexpected console statement  no-console
+src/b.ts:2:1: error Missing semicolon  semi
+    `.trim();
+
+    const failures = parseEslint(log);
+    expect(failures).toHaveLength(1);
+    expect(failures[0].file).toBe('src/b.ts');
+  });
+
+  it('handles ESLint errors without a rule name', () => {
+    const log = 'src/index.ts:10:5: error Parsing error: Unexpected token';
+    const failures = parseEslint(log);
+    expect(failures).toHaveLength(1);
+    expect(failures[0].rule).toBeNull();
+    expect(failures[0].confidence).toBe(0.8);
+  });
+
+  it('handles multiple Biome diagnostics', () => {
+    const log = `
+src/a.ts:1:1 lint/correctness/noUnusedVariables \u2501\u2501\u2501
+
+  This variable is declared but never used.
+
+src/b.ts:5:3 lint/style/useConst \u2501\u2501\u2501
+
+  This let declares a variable that is never reassigned.
+    `.trim();
+
+    const failures = parseEslint(log);
+    expect(failures).toHaveLength(2);
+    expect(failures[0].file).toBe('src/a.ts');
+    expect(failures[1].file).toBe('src/b.ts');
+  });
+
+  it('handles deeply nested file paths', () => {
+    const log = 'packages/core/src/utils/helpers/format.ts:100:15: error Unexpected any  @typescript-eslint/no-explicit-any';
+    const failures = parseEslint(log);
+    expect(failures).toHaveLength(1);
+    expect(failures[0].file).toBe('packages/core/src/utils/helpers/format.ts');
+  });
 });

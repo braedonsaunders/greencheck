@@ -1,0 +1,55 @@
+name: Bug Report
+description: Report a bug in greencheck
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting a bug! Please fill out the sections below.
+  - type: textarea
+    id: description
+    attributes:
+      label: Description
+      description: What happened?
+      placeholder: greencheck ran but didn't fix my CI failures...
+    validations:
+      required: true
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Steps to Reproduce
+      description: How can we reproduce the issue?
+      value: |
+        1. Set up greencheck with this workflow: ...
+        2. Trigger a CI failure by ...
+        3. Observe that ...
+    validations:
+      required: true
+  - type: textarea
+    id: ci-log
+    attributes:
+      label: CI Log Snippet
+      description: Paste the relevant portion of the CI log that greencheck failed to parse or fix.
+      render: text
+  - type: textarea
+    id: config
+    attributes:
+      label: Configuration
+      description: Your .greencheck.yml (if any) and the workflow YAML using greencheck.
+      render: yaml
+  - type: dropdown
+    id: agent
+    attributes:
+      label: Agent
+      options:
+        - Claude Code
+        - Codex
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: greencheck version
+      placeholder: v0.1.1
+    validations:
+      required: true

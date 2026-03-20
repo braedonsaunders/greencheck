@@ -1,25 +1,36 @@
-# Example: copy this file to .github/workflows/greencheck.yml in the repository you want to protect.
+# greencheck — automatic CI failure fixer
+# Copy this file to .github/workflows/greencheck.yml in your repository.
+#
+# Prerequisites:
+#   1. Create a PAT (fine-grained) with "contents: write" and "actions: read"
+#      and save it as GREENCHECK_TOKEN in your repo secrets.
+#   2. Add your LLM API key (ANTHROPIC_API_KEY or OPENAI_API_KEY) to secrets.
+#   3. Ensure your CI workflow name matches the "workflows" list below.
 
 name: greencheck
 
 on:
   workflow_run:
+    # List the workflow names you want greencheck to monitor.
+    # These must match the "name:" field in your CI workflow files.
     workflows: ["CI", "Tests", "Lint", "Build"]
     types: [completed]
 
 permissions:
-  actions: read
-  contents: write
-  issues: write
-  pull-requests: write
-  checks: read
+  actions: read        # Read workflow run logs
+  contents: write      # Push fix commits
+  issues: write        # Post PR comments
+  pull-requests: write # Post PR comments
+  checks: read         # Read check suite status
 
 jobs:
   fix:
+    # Only trigger on failures — not success, cancelled, or skipped
     if: ${{ github.event.workflow_run.conclusion == 'failure' }}
     runs-on: ubuntu-latest
 
     steps:
+      # Check out the exact commit that failed
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
@@ -27,6 +38,7 @@ jobs:
           fetch-depth: 0
           token: ${{ secrets.GREENCHECK_TOKEN }}
 
+      # Run greencheck with Claude Code
       - name: Run greencheck
         uses: braedonsaunders/greencheck@v0
         with:

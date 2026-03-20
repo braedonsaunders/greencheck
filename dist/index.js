@@ -39556,10 +39556,20 @@ function matchesGlob(file, pattern) {
     if (!normalizedFile || !normalizedPattern) {
         return false;
     }
-    const source = `^${escapeRegExp(normalizedPattern).replace(/\\\*/g, '.*')}$`;
-    const regex = new RegExp(source);
+    // Escape regex special chars, then convert glob * to regex .*
+    const escaped = escapeRegExp(normalizedPattern);
+    const regexSource = escaped.replace(/\*/g, '.*');
+    const regex = new RegExp(`^${regexSource}$`);
+    // Match against full path
+    if (regex.test(normalizedFile)) {
+        return true;
+    }
+    // Match against basename (for patterns like *.lock, .env*)
     const basename = normalizedFile.split('/').pop() || normalizedFile;
-    return regex.test(normalizedFile) || regex.test(basename);
+    if (regex.test(basename)) {
+        return true;
+    }
+    return false;
 }
 
 
@@ -40888,13 +40898,24 @@ async function postPRComment(octokit, owner, repo, prNumber, state) {
     const body = buildPRCommentBody(state);
     const marker = '<!-- greencheck-report -->';
     try {
-        const { data: comments } = await octokit.rest.issues.listComments({
-            owner,
-            repo,
-            issue_number: prNumber,
-            per_page: 100,
-        });
-        const existing = comments.find((comment) => comment.body?.includes(marker));
+        // Paginate to find our marker comment — PRs with 100+ comments would miss it otherwise
+        let existing;
+        let page = 1;
+        while (!existing) {
+            const { data: comments } = await octokit.rest.issues.listComments({
+                owner,
+                repo,
+                issue_number: prNumber,
+                per_page: 100,
+                page,
+            });
+            if (comments.length === 0)
+                break;
+            existing = comments.find((comment) => comment.body?.includes(marker));
+            if (comments.length < 100)
+                break;
+            page++;
+        }
         if (existing) {
             await octokit.rest.issues.updateComment({
                 owner,

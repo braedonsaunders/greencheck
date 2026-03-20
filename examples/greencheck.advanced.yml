@@ -1,0 +1,59 @@
+# Advanced greencheck configuration example.
+# Copy to .github/workflows/greencheck.yml and customize.
+
+name: greencheck
+
+on:
+  workflow_run:
+    workflows: ["CI", "Tests", "Lint", "Build"]
+    types: [completed]
+
+permissions:
+  actions: read
+  contents: write
+  issues: write
+  pull-requests: write
+  checks: read
+
+jobs:
+  fix:
+    # Only run on failures (not cancellations or skips)
+    if: ${{ github.event.workflow_run.conclusion == 'failure' }}
+    runs-on: ubuntu-latest
+    # Prevent concurrent greencheck runs on the same branch
+    concurrency:
+      group: greencheck-${{ github.event.workflow_run.head_branch }}
+      cancel-in-progress: true
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.workflow_run.head_sha }}
+          fetch-depth: 0
+          token: ${{ secrets.GREENCHECK_TOKEN }}
+
+      - name: Run greencheck
+        id: greencheck
+        uses: braedonsaunders/greencheck@v0
+        with:
+          agent: claude
+          agent-api-key: ${{ secrets.ANTHROPIC_API_KEY }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          trigger-token: ${{ secrets.GREENCHECK_TOKEN }}
+          # Override defaults for tighter control
+          max-passes: 3
+          max-cost: "$5.00"
+          timeout: 30m
+          # Only fix lint and type errors automatically
+          fix-types: lint,type-error
+          # Use a specific model
+          model: claude-sonnet-4-20250514
+
+      - name: Summary
+        if: always()
+        run: |
+          echo "Fixed: ${{ steps.greencheck.outputs.fixed }}"
+          echo "Passes: ${{ steps.greencheck.outputs.passes }}"
+          echo "Failures found: ${{ steps.greencheck.outputs.failures-found }}"
+          echo "Cost: ${{ steps.greencheck.outputs.cost }}"

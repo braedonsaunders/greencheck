@@ -14,9 +14,21 @@ export function matchesGlob(file: string, pattern: string): boolean {
     return false;
   }
 
-  const source = `^${escapeRegExp(normalizedPattern).replace(/\\\*/g, '.*')}$`;
-  const regex = new RegExp(source);
-  const basename = normalizedFile.split('/').pop() || normalizedFile;
+  // Escape regex special chars, then convert glob * to regex .*
+  const escaped = escapeRegExp(normalizedPattern);
+  const regexSource = escaped.replace(/\*/g, '.*');
+  const regex = new RegExp(`^${regexSource}$`);
 
-  return regex.test(normalizedFile) || regex.test(basename);
+  // Match against full path
+  if (regex.test(normalizedFile)) {
+    return true;
+  }
+
+  // Match against basename (for patterns like *.lock, .env*)
+  const basename = normalizedFile.split('/').pop() || normalizedFile;
+  if (regex.test(basename)) {
+    return true;
+  }
+
+  return false;
 }

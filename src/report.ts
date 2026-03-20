@@ -106,14 +106,23 @@ export async function postPRComment(
   const marker = '<!-- greencheck-report -->';
 
   try {
-    const { data: comments } = await octokit.rest.issues.listComments({
-      owner,
-      repo,
-      issue_number: prNumber,
-      per_page: 100,
-    });
+    // Paginate to find our marker comment — PRs with 100+ comments would miss it otherwise
+    let existing: { id: number; body?: string | null } | undefined;
+    let page = 1;
+    while (!existing) {
+      const { data: comments } = await octokit.rest.issues.listComments({
+        owner,
+        repo,
+        issue_number: prNumber,
+        per_page: 100,
+        page,
+      });
 
-    const existing = comments.find((comment: any) => comment.body?.includes(marker));
+      if (comments.length === 0) break;
+      existing = comments.find((comment: any) => comment.body?.includes(marker));
+      if (comments.length < 100) break;
+      page++;
+    }
     if (existing) {
       await octokit.rest.issues.updateComment({
         owner,
