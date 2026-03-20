@@ -25,6 +25,8 @@
 
 ---
 
+> **🤖 AI Agent?** Load [`SKILL.md`](SKILL.md) to install greencheck into any repo — step-by-step instructions your agent can execute directly.
+
 ## Why greencheck?
 
 Most CI failures are small — a missing semicolon, a type mismatch, a renamed import. You know the fix in seconds, but the context-switch costs minutes. greencheck eliminates that friction:
