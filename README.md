@@ -131,7 +131,7 @@ CI fails → greencheck downloads logs and saves them into .greencheck/logs/
 4. The agent investigates the failure itself, including running the repository's own tests, linting, or typechecks as needed.
 5. It pushes the fix and waits for the next workflow run on that commit.
 6. If new failures appear, it reverts the regressive commit and continues.
-7. The action refuses to operate on stale logs — if the branch has advanced since the failed run, it exits.
+7. If the branch has advanced since the failed run, greencheck keeps going on the latest branch state while using the failed run logs as its debugging context.
 
 ## Supported Languages
 
@@ -212,7 +212,7 @@ safety:
 
 ## Guardrails
 
-- **Stale context rejection** — skips if the branch moved past the failed commit
+- **Latest-branch recovery** — if the branch moved past the failed commit, greencheck still proceeds using the latest branch state plus the failed run logs
 - **Protected file filtering** — never modifies lockfiles, `.env`, or custom patterns
 - **Protected file filtering** — discards agent changes to files matching protected patterns before commit
 - **Regression revert** — automatically reverts commits that introduce new failures
@@ -233,8 +233,8 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for details.
 
 ## Troubleshooting
 
-**greencheck skips with "stale failure context"**
-The branch advanced after the failed run. greencheck only operates on the exact commit that failed. This is a safety feature — it won't patch the wrong code. Re-push or re-run the failed workflow.
+**The branch advanced after the failed run**
+greencheck now continues on the latest branch state and uses the failed run logs as context. If that newer branch already fixed the issue, the agent may decide no code change is needed.
 
 **"All changed files are protected, discarding changes"**
 The agent tried to modify files matching your `safety.never-touch-files` patterns (e.g., lockfiles, `.env`). greencheck discards those changes. If the fix genuinely requires modifying a protected file, adjust the patterns in `.greencheck.yml`.

@@ -80,10 +80,9 @@ async function run(): Promise<void> {
 
     const currentSha = await getCurrentSha();
     if (currentSha !== failedRun.headSha) {
-      core.info(
-        `Branch '${failedRun.headBranch}' advanced from ${failedRun.headSha.substring(0, 7)} to ${currentSha.substring(0, 7)}; skipping stale failure context.`,
+      core.warning(
+        `Branch '${failedRun.headBranch}' advanced from ${failedRun.headSha.substring(0, 7)} to ${currentSha.substring(0, 7)}; continuing with the latest branch state while using the failed run logs as context.`,
       );
-      return;
     }
 
     let state = getInitialState(

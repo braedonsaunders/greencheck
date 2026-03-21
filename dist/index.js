@@ -39721,8 +39721,7 @@ async function run() {
         await (0, git_ops_1.pullLatest)(failedRun.headBranch);
         const currentSha = await (0, git_ops_1.getCurrentSha)();
         if (currentSha !== failedRun.headSha) {
-            core.info(`Branch '${failedRun.headBranch}' advanced from ${failedRun.headSha.substring(0, 7)} to ${currentSha.substring(0, 7)}; skipping stale failure context.`);
-            return;
+            core.warning(`Branch '${failedRun.headBranch}' advanced from ${failedRun.headSha.substring(0, 7)} to ${currentSha.substring(0, 7)}; continuing with the latest branch state while using the failed run logs as context.`);
         }
         let state = getInitialState(failedRun.id, failedRun.name, failedRun.htmlUrl, failedRun.headBranch, failedRun.headSha, prNumber);
         const checkpoint = (0, checkpoint_1.loadCheckpoint)();
