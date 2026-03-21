@@ -166,7 +166,7 @@ function buildCommitSubject(
     return `greencheck: fix ${cluster.type} failures (pass ${passNumber})`;
   }
 
-  return `greencheck: update ${summarizeFiles(files)} (pass ${passNumber})`;
+  return `greencheck: remediate CI in ${summarizeFiles(files)} (pass ${passNumber})`;
 }
 
 function firstUsefulSummaryLine(agentSummary: string | null): string | null {
@@ -175,16 +175,31 @@ function firstUsefulSummaryLine(agentSummary: string | null): string | null {
   }
 
   for (const rawLine of agentSummary.split('\n')) {
-    const line = rawLine
-      .replace(/^#+\s*/, '')
-      .replace(/^\*\*|\*\*$/g, '')
-      .trim();
+    const line = normalizeSummaryLine(rawLine);
 
     if (!line) {
       continue;
     }
 
-    if (/^all \d+ tests pass/i.test(line) || /^summary of changes/i.test(line)) {
+    if (
+      /^all \d+ tests pass/i.test(line) ||
+      /^summary of changes/i.test(line) ||
+      /^\d+\s+files?\s+modified:?$/i.test(line) ||
+      /^agent summary:?$/i.test(line) ||
+      /:$/.test(line)
+    ) {
+      continue;
+    }
+
+    const fileHeadingMatch = line.match(/^(?:\d+\.\s*)?`?([^`]+)`?\s+[—-]\s+(.+)$/);
+    if (fileHeadingMatch) {
+      const [, maybeFile, description] = fileHeadingMatch;
+      if (looksLikeFilePath(maybeFile)) {
+        return description.trim();
+      }
+    }
+
+    if (looksLikeFilePath(line)) {
       continue;
     }
 
@@ -192,6 +207,15 @@ function firstUsefulSummaryLine(agentSummary: string | null): string | null {
   }
 
   return null;
+}
+
+function normalizeSummaryLine(rawLine: string): string {
+  return rawLine
+    .replace(/^#+\s*/, '')
+    .replace(/^[-*]\s+/, '')
+    .replace(/^\*\*|\*\*$/g, '')
+    .replace(/`/g, '')
+    .trim();
 }
 
 function truncateCommitSubject(value: string): string {
@@ -217,6 +241,10 @@ function summarizeFiles(files: string[]): string {
   }
 
   return `${files[0]}, ${files[1]}, and ${files.length - 2} more file(s)`;
+}
+
+function looksLikeFilePath(value: string): boolean {
+  return /[\\/]/.test(value) || /\.[a-z0-9]+$/i.test(value);
 }
 
 function formatAgentSummary(agentSummary: string): string {

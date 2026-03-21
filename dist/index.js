@@ -39605,26 +39605,45 @@ function buildCommitSubject(cluster, files, passNumber, agentSummary) {
     if (cluster.failures.length > 0) {
         return `greencheck: fix ${cluster.type} failures (pass ${passNumber})`;
     }
-    return `greencheck: update ${summarizeFiles(files)} (pass ${passNumber})`;
+    return `greencheck: remediate CI in ${summarizeFiles(files)} (pass ${passNumber})`;
 }
 function firstUsefulSummaryLine(agentSummary) {
     if (!agentSummary) {
         return null;
     }
     for (const rawLine of agentSummary.split('\n')) {
-        const line = rawLine
-            .replace(/^#+\s*/, '')
-            .replace(/^\*\*|\*\*$/g, '')
-            .trim();
+        const line = normalizeSummaryLine(rawLine);
         if (!line) {
             continue;
         }
-        if (/^all \d+ tests pass/i.test(line) || /^summary of changes/i.test(line)) {
+        if (/^all \d+ tests pass/i.test(line) ||
+            /^summary of changes/i.test(line) ||
+            /^\d+\s+files?\s+modified:?$/i.test(line) ||
+            /^agent summary:?$/i.test(line) ||
+            /:$/.test(line)) {
+            continue;
+        }
+        const fileHeadingMatch = line.match(/^(?:\d+\.\s*)?`?([^`]+)`?\s+[—-]\s+(.+)$/);
+        if (fileHeadingMatch) {
+            const [, maybeFile, description] = fileHeadingMatch;
+            if (looksLikeFilePath(maybeFile)) {
+                return description.trim();
+            }
+        }
+        if (looksLikeFilePath(line)) {
             continue;
         }
         return line;
     }
     return null;
+}
+function normalizeSummaryLine(rawLine) {
+    return rawLine
+        .replace(/^#+\s*/, '')
+        .replace(/^[-*]\s+/, '')
+        .replace(/^\*\*|\*\*$/g, '')
+        .replace(/`/g, '')
+        .trim();
 }
 function truncateCommitSubject(value) {
     const sanitized = value.replace(/\s+/g, ' ').trim();
@@ -39644,6 +39663,9 @@ function summarizeFiles(files) {
         return `${files[0]} and ${files[1]}`;
     }
     return `${files[0]}, ${files[1]}, and ${files.length - 2} more file(s)`;
+}
+function looksLikeFilePath(value) {
+    return /[\\/]/.test(value) || /\.[a-z0-9]+$/i.test(value);
 }
 function formatAgentSummary(agentSummary) {
     return agentSummary.trim().split('\n').slice(0, 12).join('\n');
@@ -40534,6 +40556,9 @@ function formatDuration(ms) {
 function formatCost(cents) {
     return `$${(cents / 100).toFixed(2)}`;
 }
+function describeClusterType(type) {
+    return type === 'unknown' ? 'agent-led remediation' : type;
+}
 function buildPRCommentBody(state) {
     const statusLabel = state.result === 'success'
         ? ':white_check_mark: CI is now green'
@@ -40553,7 +40578,7 @@ function buildPRCommentBody(state) {
             const scopeLabel = pass.cluster.files.length > 0
                 ? `in \`${pass.cluster.files.join('`, `')}\``
                 : 'with repository-wide investigation';
-            body += `**Pass ${pass.pass}** - ${pass.result} - ${pass.cluster.type} ${scopeLabel}\n`;
+            body += `**Pass ${pass.pass}** - ${pass.result} - ${describeClusterType(pass.cluster.type)} ${scopeLabel}\n`;
             if (pass.commitSha) {
                 body += `- Commit: \`${pass.commitSha.substring(0, 7)}\`\n`;
             }
@@ -40597,7 +40622,7 @@ function buildJobSummary(state) {
     summary += `- **Remaining failures:** ${state.latestFailures.length}\n\n`;
     for (const pass of state.passes) {
         summary += `### Pass ${pass.pass}: ${pass.result}\n`;
-        summary += `- Type: ${pass.cluster.type}\n`;
+        summary += `- Type: ${describeClusterType(pass.cluster.type)}\n`;
         summary += `- Files: ${pass.cluster.files.join(', ') || 'repository-wide'}\n`;
         summary += `- Files changed: ${pass.filesChanged.join(', ') || 'none'}\n\n`;
     }

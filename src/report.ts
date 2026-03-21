@@ -20,6 +20,10 @@ function formatCost(cents: number): string {
   return `$${(cents / 100).toFixed(2)}`;
 }
 
+function describeClusterType(type: RunState['passes'][number]['cluster']['type']): string {
+  return type === 'unknown' ? 'agent-led remediation' : type;
+}
+
 function buildPRCommentBody(state: RunState): string {
   const statusLabel = state.result === 'success'
     ? ':white_check_mark: CI is now green'
@@ -41,7 +45,7 @@ function buildPRCommentBody(state: RunState): string {
       const scopeLabel = pass.cluster.files.length > 0
         ? `in \`${pass.cluster.files.join('`, `')}\``
         : 'with repository-wide investigation';
-      body += `**Pass ${pass.pass}** - ${pass.result} - ${pass.cluster.type} ${scopeLabel}\n`;
+      body += `**Pass ${pass.pass}** - ${pass.result} - ${describeClusterType(pass.cluster.type)} ${scopeLabel}\n`;
       if (pass.commitSha) {
         body += `- Commit: \`${pass.commitSha.substring(0, 7)}\`\n`;
       }
@@ -90,7 +94,7 @@ function buildJobSummary(state: RunState): string {
 
   for (const pass of state.passes) {
     summary += `### Pass ${pass.pass}: ${pass.result}\n`;
-    summary += `- Type: ${pass.cluster.type}\n`;
+    summary += `- Type: ${describeClusterType(pass.cluster.type)}\n`;
     summary += `- Files: ${pass.cluster.files.join(', ') || 'repository-wide'}\n`;
     summary += `- Files changed: ${pass.filesChanged.join(', ') || 'none'}\n\n`;
   }
