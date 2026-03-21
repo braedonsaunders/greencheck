@@ -3,7 +3,6 @@ import * as github from '@actions/github';
 import * as fs from 'fs';
 import * as path from 'path';
 import stripAnsi from 'strip-ansi';
-import { parseLog } from './parsers';
 import { CIWorkflowRun, LogParserResult } from './types';
 
 type Octokit = ReturnType<typeof github.getOctokit>;
@@ -154,16 +153,15 @@ export async function readAndParseFailures(
   const cleanLog = stripAnsi(rawLog);
   const normalizedLog = normalizeGithubActionsLog(cleanLog);
   const logPath = writeWorkflowLog(runId, normalizedLog);
-  core.info(`Downloaded ${normalizedLog.length} bytes of logs, parsing...`);
+  core.info(`Downloaded ${normalizedLog.length} bytes of logs`);
   if (logPath) {
     core.info(`Saved workflow logs to ${logPath}`);
   }
 
-  const result = parseLog(normalizedLog);
-  core.info(`Found ${result.failures.length} failures using parsers: ${result.parserUsed}`);
-
   return {
-    ...result,
+    failures: [],
+    rawLog: normalizedLog,
+    parserUsed: 'disabled',
     logPath,
   };
 }
@@ -173,6 +171,7 @@ function normalizeGithubActionsLog(log: string): string {
     .replace(/^\uFEFF/, '')
     .split('\n')
     .map((line) => line.replace(/^[^\t]+\t[^\t]+\t\d{4}-\d{2}-\d{2}T[0-9:.]+Z\s?/, ''))
+    .map((line) => line.replace(/^\d{4}-\d{2}-\d{2}T[0-9:.]+Z\s?/, ''))
     .map((line) => line.replace(/^##\[group\]/, '').replace(/^##\[endgroup\]$/, ''))
     .join('\n');
 }

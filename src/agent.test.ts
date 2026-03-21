@@ -29,37 +29,18 @@ function createCluster(overrides: Partial<FailureCluster> = {}): FailureCluster 
 
 describe('buildPrompt', () => {
   it('gives the agent repository-wide control with direct log access', () => {
-    const prompt = buildPrompt(
-      createContext({ parserUsed: 'eslint' }),
-      createCluster({
-        type: 'lint',
-        files: ['src/app.ts'],
-        failures: [
-          {
-            type: 'lint',
-            file: 'src/app.ts',
-            line: 4,
-            column: 2,
-            message: 'Unexpected console statement.',
-            rule: 'no-console',
-            rawLog: 'error',
-            confidence: 0.8,
-          },
-        ],
-      }),
-    );
+    const prompt = buildPrompt(createContext(), createCluster());
 
     expect(prompt).toContain('Take control immediately');
     expect(prompt).toContain('You have repository-wide edit access');
     expect(prompt).toContain('`.greencheck/logs/workflow-run-123.log`');
-    expect(prompt).toContain('Treat them as a starting point, not ground truth');
-    expect(prompt).not.toContain('Fix only the failures listed above.');
+    expect(prompt).not.toContain('Parsed hints from greencheck');
   });
 
-  it('tells the agent to self-investigate when parsing found nothing', () => {
+  it('tells the agent to self-investigate from the raw workflow context', () => {
     const prompt = buildPrompt(createContext(), createCluster());
 
-    expect(prompt).toContain('No structured failures were extracted from the logs');
+    expect(prompt).toContain('Open the saved workflow log file first and use it as source of truth');
     expect(prompt).toContain('Read the saved workflow log file yourself if it exists');
   });
 });

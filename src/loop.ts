@@ -263,13 +263,11 @@ async function revertRegressiveCommit(
 }
 
 function buildAgentCluster(logResult: LogParserResult): FailureCluster {
-  const files = [...new Set(logResult.failures.map((failure) => normalizePath(failure.file)))].slice(0, 20);
-  const type = logResult.failures[0]?.type || 'unknown';
-
+  void logResult;
   return {
-    type,
-    files,
-    failures: logResult.failures,
+    type: 'unknown',
+    files: [],
+    failures: [],
     strategy: 'llm',
   };
 }

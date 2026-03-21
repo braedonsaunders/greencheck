@@ -3,29 +3,7 @@ import * as exec from '@actions/exec';
 import { AgentContext, AgentInvocation, FailureCluster, GreenCheckConfig } from './types';
 
 function buildPrompt(context: AgentContext, cluster: FailureCluster): string {
-  const failureList = cluster.failures
-    .map((failure, index) => {
-      const location = failure.line
-        ? `${failure.file}:${failure.line}${failure.column ? `:${failure.column}` : ''}`
-        : failure.file;
-      const rule = failure.rule ? ` [${failure.rule}]` : '';
-      return `${index + 1}. ${cluster.type}${rule} at ${location} - ${failure.message}`;
-    })
-    .join('\n');
-  const hintSection = cluster.failures.length > 0
-    ? `## Parsed hints from greencheck
-These are optional hints only. Treat them as a starting point, not ground truth.
-
-${failureList}
-`
-    : `## Parsed hints from greencheck
-No structured failures were extracted from the logs. You need to inspect the workflow logs and the repository yourself.
-`;
-
-  const likelyFiles = cluster.files.length > 0
-    ? cluster.files.map((file) => `- ${file}`).join('\n')
-    : '- None identified by parsing';
-
+  void cluster;
   const logAccess = context.logPath
     ? `- Full workflow logs are saved locally at \`${context.logPath}\``
     : '- Full workflow logs could not be saved locally; rely on git history, workflow files, and repo tooling';
@@ -46,12 +24,6 @@ ${logSummary}
 - Branch: ${context.branch}
 - Commit SHA: ${context.headSha}
 ${logAccess}
-- Parser(s) that matched: ${context.parserUsed}
-
-## Likely files from parsed hints
-${likelyFiles}
-
-${hintSection}
 ${logSummarySection}
 ## Immediate workflow
 - Open the saved workflow log file first and use it as source of truth.
@@ -63,10 +35,10 @@ ${logSummarySection}
 - Read the saved workflow log file yourself if it exists.
 - Inspect the repository's workflow files, scripts, package configuration, and source code as needed.
 - Run the repository's own tests, linting, typechecking, or other narrow verification commands to confirm the fix.
-- If the failure is ambiguous, investigate until you have a defensible fix instead of guessing from the parser output.
+- If the failure is ambiguous, investigate until you have a defensible fix instead of guessing.
 
 ## Constraints
-- You have repository-wide edit access. Do not treat the parsed file list as a hard scope.
+- You have repository-wide edit access.
 - Prefer the smallest reasonable code change that makes CI pass.
 - Do not add dependencies unless the failure genuinely requires it.
 - Avoid changing protected files like lockfiles or secrets unless absolutely necessary; greencheck may discard those edits before commit.
@@ -179,7 +151,7 @@ function extractFailureSnippet(rawLog: string): string[] {
   const matches = new Set<number>();
 
   for (let index = 0; index < lines.length; index++) {
-    if (/(failed|error|assert|Process completed with exit code|Traceback)/i.test(lines[index])) {
+    if (/(failed|error|assert|Process completed with exit code|Traceback|Found \d+ errors\.)/i.test(lines[index])) {
       for (let offset = -2; offset <= 2; offset++) {
         const candidate = index + offset;
         if (candidate >= 0 && candidate < lines.length) {
