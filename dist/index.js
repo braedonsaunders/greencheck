@@ -38688,6 +38688,13 @@ No structured failures were extracted from the logs. You need to inspect the wor
     const logAccess = context.logPath
         ? `- Full workflow logs are saved locally at \`${context.logPath}\``
         : '- Full workflow logs could not be saved locally; rely on git history, workflow files, and repo tooling';
+    const logSummary = buildLogSummary(context.rawLog);
+    const logSummarySection = logSummary
+        ? `
+## Failure excerpt from the workflow logs
+${logSummary}
+`
+        : '';
     return `A GitHub Actions workflow failed for this repository. Take control immediately, investigate the failure, make the smallest reasonable fix, and verify it before you finish.
 
 ## Workflow context
@@ -38703,6 +38710,7 @@ ${logAccess}
 ${likelyFiles}
 
 ${hintSection}
+${logSummarySection}
 ## What you should do
 - Start from the failed CI context above.
 - Read the saved workflow log file yourself if it exists.
@@ -38766,6 +38774,59 @@ function sanitizeCredential(value) {
         .replace(/\s+/g, '');
     return sanitized || null;
 }
+function buildLogSummary(rawLog) {
+    if (!rawLog) {
+        return '';
+    }
+    const commands = extractCommands(rawLog).slice(0, 8);
+    const failureLines = extractFailureSnippet(rawLog).slice(0, 80);
+    const sections = [];
+    if (commands.length > 0) {
+        sections.push('Commands observed in CI:');
+        sections.push('```text');
+        sections.push(...commands);
+        sections.push('```');
+    }
+    if (failureLines.length > 0) {
+        sections.push('Failure-focused log excerpt:');
+        sections.push('```text');
+        sections.push(...failureLines);
+        sections.push('```');
+    }
+    return sections.join('\n');
+}
+function extractCommands(rawLog) {
+    const lines = rawLog.split('\n');
+    const commands = [];
+    for (const line of lines) {
+        const match = line.match(/Run\s+(.+)$/);
+        if (match) {
+            const command = match[1].trim();
+            if (!commands.includes(command)) {
+                commands.push(command);
+            }
+        }
+    }
+    return commands;
+}
+function extractFailureSnippet(rawLog) {
+    const lines = rawLog.split('\n');
+    const matches = new Set();
+    for (let index = 0; index < lines.length; index++) {
+        if (/(failed|error|assert|Process completed with exit code|Traceback)/i.test(lines[index])) {
+            for (let offset = -2; offset <= 2; offset++) {
+                const candidate = index + offset;
+                if (candidate >= 0 && candidate < lines.length) {
+                    matches.add(candidate);
+                }
+            }
+        }
+    }
+    return [...matches]
+        .sort((a, b) => a - b)
+        .map((index) => lines[index])
+        .filter(Boolean);
+}
 async function invokeClaude(prompt, config, workDir) {
     const args = [
         '-p',
@@ -38773,7 +38834,7 @@ async function invokeClaude(prompt, config, workDir) {
         '--output-format',
         'json',
         '--max-turns',
-        '20',
+        '50',
     ];
     if (config.model) {
         args.push('--model', config.model);
