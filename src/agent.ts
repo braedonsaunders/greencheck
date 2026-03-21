@@ -91,13 +91,14 @@ function getAgentEnv(config: GreenCheckConfig): Record<string, string> {
 
   if (config.agent === 'claude') {
     if (config.agentOAuthToken) {
-      env.CLAUDE_CODE_OAUTH_TOKEN = config.agentOAuthToken;
+      env.CLAUDE_CODE_OAUTH_TOKEN = config.agentOAuthToken.trim();
     } else if (config.agentApiKey) {
-      env.ANTHROPIC_API_KEY = config.agentApiKey;
+      env.ANTHROPIC_API_KEY = config.agentApiKey.trim();
     }
   } else if (config.agentApiKey) {
-    env.CODEX_API_KEY = config.agentApiKey;
-    env.OPENAI_API_KEY = config.agentApiKey;
+    const trimmedApiKey = config.agentApiKey.trim();
+    env.CODEX_API_KEY = trimmedApiKey;
+    env.OPENAI_API_KEY = trimmedApiKey;
   }
 
   return env;
