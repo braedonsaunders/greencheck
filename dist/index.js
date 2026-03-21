@@ -38740,20 +38740,31 @@ async function installAgent(agent) {
 }
 function getAgentEnv(config) {
     const env = { ...process.env };
+    const oauthToken = sanitizeCredential(config.agentOAuthToken);
+    const apiKey = sanitizeCredential(config.agentApiKey);
     if (config.agent === 'claude') {
-        if (config.agentOAuthToken) {
-            env.CLAUDE_CODE_OAUTH_TOKEN = config.agentOAuthToken.trim();
+        if (oauthToken) {
+            env.CLAUDE_CODE_OAUTH_TOKEN = oauthToken;
         }
-        else if (config.agentApiKey) {
-            env.ANTHROPIC_API_KEY = config.agentApiKey.trim();
+        else if (apiKey) {
+            env.ANTHROPIC_API_KEY = apiKey;
         }
     }
-    else if (config.agentApiKey) {
-        const trimmedApiKey = config.agentApiKey.trim();
-        env.CODEX_API_KEY = trimmedApiKey;
-        env.OPENAI_API_KEY = trimmedApiKey;
+    else if (apiKey) {
+        env.CODEX_API_KEY = apiKey;
+        env.OPENAI_API_KEY = apiKey;
     }
     return env;
+}
+function sanitizeCredential(value) {
+    if (!value) {
+        return null;
+    }
+    const sanitized = value
+        .trim()
+        .replace(/^['"]+|['"]+$/g, '')
+        .replace(/\s+/g, '');
+    return sanitized || null;
 }
 async function invokeClaude(prompt, config, workDir) {
     const args = [
