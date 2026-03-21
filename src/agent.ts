@@ -53,6 +53,11 @@ ${likelyFiles}
 
 ${hintSection}
 ${logSummarySection}
+## Immediate workflow
+- Open the saved workflow log file first and use it as source of truth.
+- Re-run the exact failing commands you can infer from the CI logs, starting with the narrowest failing scope.
+- Make the smallest fix that addresses the concrete failures you find, then verify with repo-native commands before finishing.
+
 ## What you should do
 - Start from the failed CI context above.
 - Read the saved workflow log file yourself if it exists.

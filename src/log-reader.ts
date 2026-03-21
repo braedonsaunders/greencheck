@@ -152,19 +152,29 @@ export async function readAndParseFailures(
   }
 
   const cleanLog = stripAnsi(rawLog);
-  const logPath = writeWorkflowLog(runId, cleanLog);
-  core.info(`Downloaded ${cleanLog.length} bytes of logs, parsing...`);
+  const normalizedLog = normalizeGithubActionsLog(cleanLog);
+  const logPath = writeWorkflowLog(runId, normalizedLog);
+  core.info(`Downloaded ${normalizedLog.length} bytes of logs, parsing...`);
   if (logPath) {
     core.info(`Saved workflow logs to ${logPath}`);
   }
 
-  const result = parseLog(cleanLog);
+  const result = parseLog(normalizedLog);
   core.info(`Found ${result.failures.length} failures using parsers: ${result.parserUsed}`);
 
   return {
     ...result,
     logPath,
   };
+}
+
+function normalizeGithubActionsLog(log: string): string {
+  return log
+    .replace(/^\uFEFF/, '')
+    .split('\n')
+    .map((line) => line.replace(/^[^\t]+\t[^\t]+\t\d{4}-\d{2}-\d{2}T[0-9:.]+Z\s?/, ''))
+    .map((line) => line.replace(/^##\[group\]/, '').replace(/^##\[endgroup\]$/, ''))
+    .join('\n');
 }
 
 function decodeLogPayload(data: LogPayload): string {

@@ -38711,6 +38711,11 @@ ${likelyFiles}
 
 ${hintSection}
 ${logSummarySection}
+## Immediate workflow
+- Open the saved workflow log file first and use it as source of truth.
+- Re-run the exact failing commands you can infer from the CI logs, starting with the narrowest failing scope.
+- Make the smallest fix that addresses the concrete failures you find, then verify with repo-native commands before finishing.
+
 ## What you should do
 - Start from the failed CI context above.
 - Read the saved workflow log file yourself if it exists.
@@ -40097,17 +40102,26 @@ async function readAndParseFailures(octokit, owner, repo, runId) {
         return { failures: [], rawLog: '', parserUsed: 'none', logPath: null };
     }
     const cleanLog = (0, strip_ansi_1.default)(rawLog);
-    const logPath = writeWorkflowLog(runId, cleanLog);
-    core.info(`Downloaded ${cleanLog.length} bytes of logs, parsing...`);
+    const normalizedLog = normalizeGithubActionsLog(cleanLog);
+    const logPath = writeWorkflowLog(runId, normalizedLog);
+    core.info(`Downloaded ${normalizedLog.length} bytes of logs, parsing...`);
     if (logPath) {
         core.info(`Saved workflow logs to ${logPath}`);
     }
-    const result = (0, parsers_1.parseLog)(cleanLog);
+    const result = (0, parsers_1.parseLog)(normalizedLog);
     core.info(`Found ${result.failures.length} failures using parsers: ${result.parserUsed}`);
     return {
         ...result,
         logPath,
     };
+}
+function normalizeGithubActionsLog(log) {
+    return log
+        .replace(/^\uFEFF/, '')
+        .split('\n')
+        .map((line) => line.replace(/^[^\t]+\t[^\t]+\t\d{4}-\d{2}-\d{2}T[0-9:.]+Z\s?/, ''))
+        .map((line) => line.replace(/^##\[group\]/, '').replace(/^##\[endgroup\]$/, ''))
+        .join('\n');
 }
 function decodeLogPayload(data) {
     if (typeof data === 'string') {
@@ -40541,7 +40555,7 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
     return (mod && mod.__esModule) ? mod : { "default": mod };
 };
 Object.defineProperty(exports, "__esModule", ({ value: true }));
-exports.parseRust = exports.parseGo = exports.parsePytest = exports.parseJest = exports.parseTypeScript = exports.parseEslint = void 0;
+exports.parseRust = exports.parseGo = exports.parseRuff = exports.parsePytest = exports.parseJest = exports.parseTypeScript = exports.parseEslint = void 0;
 exports.parseLog = parseLog;
 const strip_ansi_1 = __importDefault(__nccwpck_require__(348));
 const eslint_1 = __nccwpck_require__(5939);
@@ -40550,6 +40564,7 @@ const jest_1 = __nccwpck_require__(3416);
 const pytest_1 = __nccwpck_require__(4241);
 const go_1 = __nccwpck_require__(5444);
 const rust_1 = __nccwpck_require__(1504);
+const ruff_1 = __nccwpck_require__(9347);
 const parsers = [
     {
         name: 'eslint',
@@ -40573,6 +40588,11 @@ const parsers = [
         name: 'pytest',
         detect: (log) => /FAILED\s+\S+::\S+/.test(log) || /pytest/i.test(log),
         parse: pytest_1.parsePytest,
+    },
+    {
+        name: 'ruff',
+        detect: (log) => /ruff/i.test(log) || /^[A-Z]\d{3,4}\s+.+$/m.test(log),
+        parse: ruff_1.parseRuff,
     },
     {
         name: 'go',
@@ -40624,6 +40644,8 @@ var jest_2 = __nccwpck_require__(3416);
 Object.defineProperty(exports, "parseJest", ({ enumerable: true, get: function () { return jest_2.parseJest; } }));
 var pytest_2 = __nccwpck_require__(4241);
 Object.defineProperty(exports, "parsePytest", ({ enumerable: true, get: function () { return pytest_2.parsePytest; } }));
+var ruff_2 = __nccwpck_require__(9347);
+Object.defineProperty(exports, "parseRuff", ({ enumerable: true, get: function () { return ruff_2.parseRuff; } }));
 var go_2 = __nccwpck_require__(5444);
 Object.defineProperty(exports, "parseGo", ({ enumerable: true, get: function () { return go_2.parseGo; } }));
 var rust_2 = __nccwpck_require__(1504);
@@ -40795,6 +40817,60 @@ function parsePytest(log) {
                 });
             }
         }
+    }
+    return failures;
+}
+
+
+/***/ }),
+
+/***/ 9347:
+/***/ ((__unused_webpack_module, exports) => {
+
+"use strict";
+
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.parseRuff = parseRuff;
+const RUFF_DIAGNOSTIC_PATTERN = /^([A-Z]\d{3,4})\s+(.+)$/;
+const LOCATION_PATTERN = /^\s*-->\s+(.+?):(\d+):(\d+)$/;
+function parseRuff(log) {
+    const failures = [];
+    const lines = log.split('\n');
+    for (let index = 0; index < lines.length; index++) {
+        const line = lines[index].trim();
+        const diagnosticMatch = line.match(RUFF_DIAGNOSTIC_PATTERN);
+        if (!diagnosticMatch) {
+            continue;
+        }
+        const [, rule, message] = diagnosticMatch;
+        let file = '';
+        let lineNum = null;
+        let column = null;
+        const rawLines = [line];
+        for (let scanIndex = index + 1; scanIndex < Math.min(index + 8, lines.length); scanIndex++) {
+            const nextLine = lines[scanIndex];
+            rawLines.push(nextLine);
+            const locationMatch = nextLine.match(LOCATION_PATTERN);
+            if (locationMatch) {
+                file = locationMatch[1].trim();
+                lineNum = Number.parseInt(locationMatch[2], 10);
+                column = Number.parseInt(locationMatch[3], 10);
+                break;
+            }
+        }
+        if (!file) {
+            continue;
+        }
+        failures.push({
+            type: 'lint',
+            file,
+            line: lineNum,
+            column,
+            message: message.trim(),
+            rule,
+            rawLog: rawLines.join('\n'),
+            confidence: 0.95,
+        });
     }
     return failures;
 }

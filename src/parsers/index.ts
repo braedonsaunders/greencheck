@@ -6,6 +6,7 @@ import { parseJest } from './jest';
 import { parsePytest } from './pytest';
 import { parseGo } from './go';
 import { parseRust } from './rust';
+import { parseRuff } from './ruff';
 
 interface Parser {
   name: string;
@@ -37,6 +38,11 @@ const parsers: Parser[] = [
     name: 'pytest',
     detect: (log) => /FAILED\s+\S+::\S+/.test(log) || /pytest/i.test(log),
     parse: parsePytest,
+  },
+  {
+    name: 'ruff',
+    detect: (log) => /ruff/i.test(log) || /^[A-Z]\d{3,4}\s+.+$/m.test(log),
+    parse: parseRuff,
   },
   {
     name: 'go',
@@ -89,5 +95,6 @@ export { parseEslint } from './eslint';
 export { parseTypeScript } from './typescript';
 export { parseJest } from './jest';
 export { parsePytest } from './pytest';
+export { parseRuff } from './ruff';
 export { parseGo } from './go';
 export { parseRust } from './rust';
