@@ -69,6 +69,7 @@ export async function commitFix(
   cluster: FailureCluster,
   passNumber: number,
   config: GreenCheckConfig,
+  agentSummary: string | null,
   cwd?: string,
 ): Promise<{ commitSha: string | null; filesCommitted: string[] }> {
   const changedFiles = await getChangedFiles(cwd);
@@ -110,7 +111,7 @@ export async function commitFix(
   const truncated = cluster.failures.length > 5
     ? `\n  ... and ${cluster.failures.length - 5} more`
     : '';
-  const scopeLabel = cluster.files.length > 0 ? cluster.files.join(', ') : 'repository';
+  const scopeLabel = safeFiles.length > 0 ? safeFiles.join(', ') : 'repository';
   const summaryHeader = cluster.failures.length > 0
     ? `Fixed ${cluster.failures.length} ${cluster.type} failure(s) related to ${scopeLabel}`
     : `Investigated workflow failure and updated ${scopeLabel}`;
@@ -120,12 +121,18 @@ ${failuresSummary}${truncated}
 
 `
     : '';
+  const agentSection = agentSummary
+    ? `Agent summary:
+${formatAgentSummary(agentSummary)}
 
-  const message = `greencheck: fix ${cluster.type} failures (pass ${passNumber})
+`
+    : '';
+
+  const message = `${buildCommitSubject(cluster, safeFiles, passNumber, agentSummary)}
 
 ${summaryHeader}
 
-${failuresSection}Automated fix by greencheck - https://github.com/braedonsaunders/greencheck`;
+${agentSection}${failuresSection}Automated fix by greencheck - https://github.com/braedonsaunders/greencheck`;
 
   await git(['config', 'user.name', 'greencheck[bot]'], cwd);
   await git(['config', 'user.email', 'greencheck[bot]@users.noreply.github.com'], cwd);
@@ -142,6 +149,78 @@ ${failuresSection}Automated fix by greencheck - https://github.com/braedonsaunde
     commitSha: shaResult.stdout,
     filesCommitted: safeFiles,
   };
+}
+
+function buildCommitSubject(
+  cluster: FailureCluster,
+  files: string[],
+  passNumber: number,
+  agentSummary: string | null,
+): string {
+  const summaryLine = firstUsefulSummaryLine(agentSummary);
+  if (summaryLine) {
+    return `greencheck: ${truncateCommitSubject(summaryLine)} (pass ${passNumber})`;
+  }
+
+  if (cluster.failures.length > 0) {
+    return `greencheck: fix ${cluster.type} failures (pass ${passNumber})`;
+  }
+
+  return `greencheck: update ${summarizeFiles(files)} (pass ${passNumber})`;
+}
+
+function firstUsefulSummaryLine(agentSummary: string | null): string | null {
+  if (!agentSummary) {
+    return null;
+  }
+
+  for (const rawLine of agentSummary.split('\n')) {
+    const line = rawLine
+      .replace(/^#+\s*/, '')
+      .replace(/^\*\*|\*\*$/g, '')
+      .trim();
+
+    if (!line) {
+      continue;
+    }
+
+    if (/^all \d+ tests pass/i.test(line) || /^summary of changes/i.test(line)) {
+      continue;
+    }
+
+    return line;
+  }
+
+  return null;
+}
+
+function truncateCommitSubject(value: string): string {
+  const sanitized = value.replace(/\s+/g, ' ').trim();
+  if (sanitized.length <= 72) {
+    return sanitized;
+  }
+
+  return `${sanitized.slice(0, 69).trimEnd()}...`;
+}
+
+function summarizeFiles(files: string[]): string {
+  if (files.length === 0) {
+    return 'repository changes';
+  }
+
+  if (files.length === 1) {
+    return files[0];
+  }
+
+  if (files.length === 2) {
+    return `${files[0]} and ${files[1]}`;
+  }
+
+  return `${files[0]}, ${files[1]}, and ${files.length - 2} more file(s)`;
+}
+
+function formatAgentSummary(agentSummary: string): string {
+  return agentSummary.trim().split('\n').slice(0, 12).join('\n');
 }
 
 export async function pushChanges(

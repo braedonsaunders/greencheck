@@ -120,6 +120,7 @@ export interface AgentInvocation {
     prompt: string;
     model: string | null;
     filesChanged: string[];
+    summary: string | null;
     costCents: number;
     durationMs: number;
     exitCode: number;

@@ -42,7 +42,6 @@ function buildPRCommentBody(state: RunState): string {
         ? `in \`${pass.cluster.files.join('`, `')}\``
         : 'with repository-wide investigation';
       body += `**Pass ${pass.pass}** - ${pass.result} - ${pass.cluster.type} ${scopeLabel}\n`;
-      body += `- ${pass.cluster.failures.length} parsed failure hint(s) addressed\n`;
       if (pass.commitSha) {
         body += `- Commit: \`${pass.commitSha.substring(0, 7)}\`\n`;
       }
@@ -93,7 +92,7 @@ function buildJobSummary(state: RunState): string {
     summary += `### Pass ${pass.pass}: ${pass.result}\n`;
     summary += `- Type: ${pass.cluster.type}\n`;
     summary += `- Files: ${pass.cluster.files.join(', ') || 'repository-wide'}\n`;
-    summary += `- Parsed failure hints: ${pass.cluster.failures.length}\n\n`;
+    summary += `- Files changed: ${pass.filesChanged.join(', ') || 'none'}\n\n`;
   }
 
   return summary;

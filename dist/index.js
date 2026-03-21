@@ -38663,7 +38663,8 @@ exports.invokeAgent = invokeAgent;
 exports.buildPrompt = buildPrompt;
 const core = __importStar(__nccwpck_require__(7484));
 const exec = __importStar(__nccwpck_require__(5236));
-function buildPrompt(context, _cluster) {
+function buildPrompt(context, cluster) {
+    void cluster;
     const logAccess = context.logPath
         ? `- Full workflow logs are saved locally at \`${context.logPath}\``
         : '- Full workflow logs could not be saved locally; rely on git history, workflow files, and repo tooling';
@@ -38699,6 +38700,7 @@ ${logSummarySection}
 ## Constraints
 - You have repository-wide edit access.
 - Prefer the smallest reasonable code change that makes CI pass.
+- Prefer fixing the underlying issue over simply silencing lint or type checks when the failing code looks incomplete or incorrectly wired.
 - Do not add dependencies unless the failure genuinely requires it.
 - Avoid changing protected files like lockfiles or secrets unless absolutely necessary; greencheck may discard those edits before commit.
 - Before finishing, run the narrowest verification you can and leave the repo in a state that should pass CI.`;
@@ -38850,7 +38852,7 @@ async function runAgentCommand(command, args, agent, mode, prompt, config, workD
                 stderr += data.toString();
             },
         },
-        silent: false,
+        silent: true,
     });
     return {
         agent,
@@ -38858,6 +38860,7 @@ async function runAgentCommand(command, args, agent, mode, prompt, config, workD
         prompt,
         model: config.model,
         filesChanged: [],
+        summary: extractAgentSummary(stdout),
         costCents: estimateCost(stdout.length + stderr.length + prompt.length, agent),
         durationMs: Date.now() - startTime,
         exitCode,
@@ -38869,6 +38872,25 @@ function estimateCost(totalChars, agent) {
     const tokens = totalChars / 4;
     const ratePerMillion = agent === 'claude' ? 5 : 3;
     return Math.round((tokens / 1_000_000) * ratePerMillion * 100);
+}
+function extractAgentSummary(stdout) {
+    const trimmed = stdout.trim();
+    if (!trimmed) {
+        return null;
+    }
+    const lines = trimmed.split('\n').reverse();
+    for (const line of lines) {
+        try {
+            const parsed = JSON.parse(line);
+            if (typeof parsed.result === 'string' && parsed.result.trim()) {
+                return parsed.result.trim();
+            }
+        }
+        catch {
+            continue;
+        }
+    }
+    return null;
 }
 async function invokeAgent(context, cluster, config, workDir) {
     const prompt = buildPrompt(context, cluster);
@@ -39510,7 +39532,7 @@ async function getChangedFiles(cwd) {
             .map((line) => line.trim())
             .filter(Boolean))];
 }
-async function commitFix(cluster, passNumber, config, cwd) {
+async function commitFix(cluster, passNumber, config, agentSummary, cwd) {
     const changedFiles = await getChangedFiles(cwd);
     if (changedFiles.length === 0) {
         core.info('No changes to commit');
@@ -39540,7 +39562,7 @@ async function commitFix(cluster, passNumber, config, cwd) {
     const truncated = cluster.failures.length > 5
         ? `\n  ... and ${cluster.failures.length - 5} more`
         : '';
-    const scopeLabel = cluster.files.length > 0 ? cluster.files.join(', ') : 'repository';
+    const scopeLabel = safeFiles.length > 0 ? safeFiles.join(', ') : 'repository';
     const summaryHeader = cluster.failures.length > 0
         ? `Fixed ${cluster.failures.length} ${cluster.type} failure(s) related to ${scopeLabel}`
         : `Investigated workflow failure and updated ${scopeLabel}`;
@@ -39550,11 +39572,17 @@ ${failuresSummary}${truncated}
 
 `
         : '';
-    const message = `greencheck: fix ${cluster.type} failures (pass ${passNumber})
+    const agentSection = agentSummary
+        ? `Agent summary:
+${formatAgentSummary(agentSummary)}
+
+`
+        : '';
+    const message = `${buildCommitSubject(cluster, safeFiles, passNumber, agentSummary)}
 
 ${summaryHeader}
 
-${failuresSection}Automated fix by greencheck - https://github.com/braedonsaunders/greencheck`;
+${agentSection}${failuresSection}Automated fix by greencheck - https://github.com/braedonsaunders/greencheck`;
     await git(['config', 'user.name', 'greencheck[bot]'], cwd);
     await git(['config', 'user.email', 'greencheck[bot]@users.noreply.github.com'], cwd);
     const commitResult = await git(['commit', '-m', message], cwd);
@@ -39568,6 +39596,57 @@ ${failuresSection}Automated fix by greencheck - https://github.com/braedonsaunde
         commitSha: shaResult.stdout,
         filesCommitted: safeFiles,
     };
+}
+function buildCommitSubject(cluster, files, passNumber, agentSummary) {
+    const summaryLine = firstUsefulSummaryLine(agentSummary);
+    if (summaryLine) {
+        return `greencheck: ${truncateCommitSubject(summaryLine)} (pass ${passNumber})`;
+    }
+    if (cluster.failures.length > 0) {
+        return `greencheck: fix ${cluster.type} failures (pass ${passNumber})`;
+    }
+    return `greencheck: update ${summarizeFiles(files)} (pass ${passNumber})`;
+}
+function firstUsefulSummaryLine(agentSummary) {
+    if (!agentSummary) {
+        return null;
+    }
+    for (const rawLine of agentSummary.split('\n')) {
+        const line = rawLine
+            .replace(/^#+\s*/, '')
+            .replace(/^\*\*|\*\*$/g, '')
+            .trim();
+        if (!line) {
+            continue;
+        }
+        if (/^all \d+ tests pass/i.test(line) || /^summary of changes/i.test(line)) {
+            continue;
+        }
+        return line;
+    }
+    return null;
+}
+function truncateCommitSubject(value) {
+    const sanitized = value.replace(/\s+/g, ' ').trim();
+    if (sanitized.length <= 72) {
+        return sanitized;
+    }
+    return `${sanitized.slice(0, 69).trimEnd()}...`;
+}
+function summarizeFiles(files) {
+    if (files.length === 0) {
+        return 'repository changes';
+    }
+    if (files.length === 1) {
+        return files[0];
+    }
+    if (files.length === 2) {
+        return `${files[0]} and ${files[1]}`;
+    }
+    return `${files[0]}, ${files[1]}, and ${files.length - 2} more file(s)`;
+}
+function formatAgentSummary(agentSummary) {
+    return agentSummary.trim().split('\n').slice(0, 12).join('\n');
 }
 async function pushChanges(branch, token, owner, repo, cwd) {
     const originalRemote = await git(['remote', 'get-url', 'origin'], cwd);
@@ -40299,7 +40378,7 @@ async function fixCluster(context, cluster, pass, config) {
         }
         const commitResult = config.dryRun
             ? { commitSha: null, filesCommitted: changedFiles }
-            : await (0, git_ops_1.commitFix)(cluster, pass, config);
+            : await (0, git_ops_1.commitFix)(cluster, pass, config, invocation.summary);
         if (!config.dryRun && commitResult.filesCommitted.length === 0) {
             core.warning('Agent changes could not be committed after protected-file filtering');
         }
@@ -40360,7 +40439,8 @@ async function revertRegressiveCommit(octokit, owner, repo, state, commitSha, co
     (0, checkpoint_1.saveCheckpoint)(state);
     return true;
 }
-function buildAgentCluster(_logResult) {
+function buildAgentCluster(logResult) {
+    void logResult;
     return {
         type: 'unknown',
         files: [],
@@ -40474,7 +40554,6 @@ function buildPRCommentBody(state) {
                 ? `in \`${pass.cluster.files.join('`, `')}\``
                 : 'with repository-wide investigation';
             body += `**Pass ${pass.pass}** - ${pass.result} - ${pass.cluster.type} ${scopeLabel}\n`;
-            body += `- ${pass.cluster.failures.length} parsed failure hint(s) addressed\n`;
             if (pass.commitSha) {
                 body += `- Commit: \`${pass.commitSha.substring(0, 7)}\`\n`;
             }
@@ -40520,7 +40599,7 @@ function buildJobSummary(state) {
         summary += `### Pass ${pass.pass}: ${pass.result}\n`;
         summary += `- Type: ${pass.cluster.type}\n`;
         summary += `- Files: ${pass.cluster.files.join(', ') || 'repository-wide'}\n`;
-        summary += `- Parsed failure hints: ${pass.cluster.failures.length}\n\n`;
+        summary += `- Files changed: ${pass.filesChanged.join(', ') || 'none'}\n\n`;
     }
     return summary;
 }

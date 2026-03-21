@@ -175,7 +175,7 @@ async function fixCluster(
 
     const commitResult = config.dryRun
       ? { commitSha: null, filesCommitted: changedFiles }
-      : await commitFix(cluster, pass, config);
+      : await commitFix(cluster, pass, config, invocation.summary);
 
     if (!config.dryRun && commitResult.filesCommitted.length === 0) {
       core.warning('Agent changes could not be committed after protected-file filtering');

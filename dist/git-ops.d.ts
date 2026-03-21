@@ -2,7 +2,7 @@ import { FailureCluster, GreenCheckConfig } from './types';
 export declare function checkoutBranch(branch: string, cwd?: string): Promise<void>;
 export declare function pullLatest(branch: string, cwd?: string): Promise<void>;
 export declare function getChangedFiles(cwd?: string): Promise<string[]>;
-export declare function commitFix(cluster: FailureCluster, passNumber: number, config: GreenCheckConfig, cwd?: string): Promise<{
+export declare function commitFix(cluster: FailureCluster, passNumber: number, config: GreenCheckConfig, agentSummary: string | null, cwd?: string): Promise<{
     commitSha: string | null;
     filesCommitted: string[];
 }>;

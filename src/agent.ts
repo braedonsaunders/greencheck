@@ -40,6 +40,7 @@ ${logSummarySection}
 ## Constraints
 - You have repository-wide edit access.
 - Prefer the smallest reasonable code change that makes CI pass.
+- Prefer fixing the underlying issue over simply silencing lint or type checks when the failing code looks incomplete or incorrectly wired.
 - Do not add dependencies unless the failure genuinely requires it.
 - Avoid changing protected files like lockfiles or secrets unless absolutely necessary; greencheck may discard those edits before commit.
 - Before finishing, run the narrowest verification you can and leave the repo in a state that should pass CI.`;
@@ -237,7 +238,7 @@ async function runAgentCommand(
         stderr += data.toString();
       },
     },
-    silent: false,
+    silent: true,
   });
 
   return {
@@ -246,6 +247,7 @@ async function runAgentCommand(
     prompt,
     model: config.model,
     filesChanged: [],
+    summary: extractAgentSummary(stdout),
     costCents: estimateCost(stdout.length + stderr.length + prompt.length, agent),
     durationMs: Date.now() - startTime,
     exitCode,
@@ -258,6 +260,27 @@ function estimateCost(totalChars: number, agent: 'claude' | 'codex'): number {
   const tokens = totalChars / 4;
   const ratePerMillion = agent === 'claude' ? 5 : 3;
   return Math.round((tokens / 1_000_000) * ratePerMillion * 100);
+}
+
+function extractAgentSummary(stdout: string): string | null {
+  const trimmed = stdout.trim();
+  if (!trimmed) {
+    return null;
+  }
+
+  const lines = trimmed.split('\n').reverse();
+  for (const line of lines) {
+    try {
+      const parsed = JSON.parse(line) as { result?: unknown };
+      if (typeof parsed.result === 'string' && parsed.result.trim()) {
+        return parsed.result.trim();
+      }
+    } catch {
+      continue;
+    }
+  }
+
+  return null;
 }
 
 export async function invokeAgent(
