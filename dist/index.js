@@ -38663,7 +38663,7 @@ exports.invokeAgent = invokeAgent;
 exports.buildPrompt = buildPrompt;
 const core = __importStar(__nccwpck_require__(7484));
 const exec = __importStar(__nccwpck_require__(5236));
-function buildPrompt(cluster) {
+function buildPrompt(context, cluster) {
     const failureList = cluster.failures
         .map((failure, index) => {
         const location = failure.line
@@ -38673,21 +38673,49 @@ function buildPrompt(cluster) {
         return `${index + 1}. ${cluster.type}${rule} at ${location} - ${failure.message}`;
     })
         .join('\n');
-    const fileList = cluster.files.map((file) => `- ${file}`).join('\n');
-    return `Fix the following CI failures in this repository.
+    const hintSection = cluster.failures.length > 0
+        ? `## Parsed hints from greencheck
+These are optional hints only. Treat them as a starting point, not ground truth.
 
-## Files in scope
-${fileList}
-
-## Failures
 ${failureList}
+`
+        : `## Parsed hints from greencheck
+No structured failures were extracted from the logs. You need to inspect the workflow logs and the repository yourself.
+`;
+    const likelyFiles = cluster.files.length > 0
+        ? cluster.files.map((file) => `- ${file}`).join('\n')
+        : '- None identified by parsing';
+    const logAccess = context.logPath
+        ? `- Full workflow logs are saved locally at \`${context.logPath}\``
+        : '- Full workflow logs could not be saved locally; rely on git history, workflow files, and repo tooling';
+    return `A GitHub Actions workflow failed for this repository. Take control immediately, investigate the failure, make the smallest reasonable fix, and verify it before you finish.
+
+## Workflow context
+- Workflow run id: ${context.workflowRunId}
+- Workflow name: ${context.workflowName || 'unknown'}
+- Workflow URL: ${context.workflowUrl || 'unknown'}
+- Branch: ${context.branch}
+- Commit SHA: ${context.headSha}
+${logAccess}
+- Parser(s) that matched: ${context.parserUsed}
+
+## Likely files from parsed hints
+${likelyFiles}
+
+${hintSection}
+## What you should do
+- Start from the failed CI context above.
+- Read the saved workflow log file yourself if it exists.
+- Inspect the repository's workflow files, scripts, package configuration, and source code as needed.
+- Run the repository's own tests, linting, typechecking, or other narrow verification commands to confirm the fix.
+- If the failure is ambiguous, investigate until you have a defensible fix instead of guessing from the parser output.
 
 ## Constraints
-- Fix only the failures listed above.
-- Do not modify files outside the scope list unless a generated lockfile changes as a direct result of the fix.
-- Prefer the smallest possible code change.
-- Do not add new dependencies unless the failure cannot be resolved without them.
-- Run the narrowest verification you can for the changed area before you finish.`;
+- You have repository-wide edit access. Do not treat the parsed file list as a hard scope.
+- Prefer the smallest reasonable code change that makes CI pass.
+- Do not add dependencies unless the failure genuinely requires it.
+- Avoid changing protected files like lockfiles or secrets unless absolutely necessary; greencheck may discard those edits before commit.
+- Before finishing, run the narrowest verification you can and leave the repo in a state that should pass CI.`;
 }
 async function commandExists(command) {
     const lookupCommand = process.platform === 'win32' ? 'where' : 'which';
@@ -38791,9 +38819,9 @@ function estimateCost(totalChars, agent) {
     const ratePerMillion = agent === 'claude' ? 5 : 3;
     return Math.round((tokens / 1_000_000) * ratePerMillion * 100);
 }
-async function invokeAgent(cluster, config, workDir) {
-    const prompt = buildPrompt(cluster);
-    core.info(`Invoking ${config.agent} for ${cluster.type} failures in ${cluster.files.join(', ')}`);
+async function invokeAgent(context, cluster, config, workDir) {
+    const prompt = buildPrompt(context, cluster);
+    core.info(`Invoking ${config.agent} for workflow run ${context.workflowRunId} on ${context.branch}`);
     const installed = await installAgent(config.agent);
     if (!installed) {
         throw new Error(`Failed to install ${config.agent} CLI`);
@@ -38884,6 +38912,10 @@ function loadCheckpoint(workDir) {
         const content = fs.readFileSync(filePath, 'utf-8');
         const state = JSON.parse(content);
         state.latestFailures = state.latestFailures || [];
+        state.latestParserUsed = state.latestParserUsed || 'none';
+        state.latestLogPath = state.latestLogPath || null;
+        state.workflowName = state.workflowName || '';
+        state.workflowUrl = state.workflowUrl || '';
         core.info(`Loaded checkpoint: ${state.passes.length} passes, ${state.commits.length} commits`);
         return state;
     }
@@ -39432,13 +39464,13 @@ async function commitFix(cluster, passNumber, config, cwd) {
     const changedFiles = await getChangedFiles(cwd);
     if (changedFiles.length === 0) {
         core.info('No changes to commit');
-        return null;
+        return { commitSha: null, filesCommitted: [] };
     }
     const safeFiles = changedFiles.filter((file) => !isProtectedFile(file, config.safety.neverTouchFiles));
     if (safeFiles.length === 0) {
         core.warning('All changed files are protected, discarding changes');
         await discardAllChanges(cwd);
-        return null;
+        return { commitSha: null, filesCommitted: [] };
     }
     const protectedFiles = changedFiles.filter((file) => isProtectedFile(file, config.safety.neverTouchFiles));
     if (protectedFiles.length > 0) {
@@ -39457,24 +39489,34 @@ async function commitFix(cluster, passNumber, config, cwd) {
     const truncated = cluster.failures.length > 5
         ? `\n  ... and ${cluster.failures.length - 5} more`
         : '';
-    const message = `greencheck: fix ${cluster.type} failures (pass ${passNumber})
-
-Fixed ${cluster.failures.length} ${cluster.type} failure(s) in ${cluster.files.join(', ')}
-
-Failures addressed:
+    const scopeLabel = cluster.files.length > 0 ? cluster.files.join(', ') : 'repository';
+    const summaryHeader = cluster.failures.length > 0
+        ? `Fixed ${cluster.failures.length} ${cluster.type} failure(s) related to ${scopeLabel}`
+        : `Investigated workflow failure and updated ${scopeLabel}`;
+    const failuresSection = cluster.failures.length > 0
+        ? `Failures addressed:
 ${failuresSummary}${truncated}
 
-Automated fix by greencheck - https://github.com/braedonsaunders/greencheck`;
+`
+        : '';
+    const message = `greencheck: fix ${cluster.type} failures (pass ${passNumber})
+
+${summaryHeader}
+
+${failuresSection}Automated fix by greencheck - https://github.com/braedonsaunders/greencheck`;
     await git(['config', 'user.name', 'greencheck[bot]'], cwd);
     await git(['config', 'user.email', 'greencheck[bot]@users.noreply.github.com'], cwd);
     const commitResult = await git(['commit', '-m', message], cwd);
     if (commitResult.exitCode !== 0) {
         core.error(`Commit failed: ${commitResult.stderr}`);
-        return null;
+        return { commitSha: null, filesCommitted: [] };
     }
     const shaResult = await git(['rev-parse', 'HEAD'], cwd);
     core.info(`Committed fix: ${shaResult.stdout.substring(0, 7)}`);
-    return shaResult.stdout;
+    return {
+        commitSha: shaResult.stdout,
+        filesCommitted: safeFiles,
+    };
 }
 async function pushChanges(branch, token, owner, repo, cwd) {
     const originalRemote = await git(['remote', 'get-url', 'origin'], cwd);
@@ -39682,11 +39724,15 @@ async function run() {
             core.info(`Branch '${failedRun.headBranch}' advanced from ${failedRun.headSha.substring(0, 7)} to ${currentSha.substring(0, 7)}; skipping stale failure context.`);
             return;
         }
-        let state = getInitialState(failedRun.id, failedRun.headBranch, failedRun.headSha, prNumber);
+        let state = getInitialState(failedRun.id, failedRun.name, failedRun.htmlUrl, failedRun.headBranch, failedRun.headSha, prNumber);
         const checkpoint = (0, checkpoint_1.loadCheckpoint)();
         if (checkpoint && shouldResumeCheckpoint(checkpoint, failedRun.id, failedRun.headBranch)) {
             state = checkpoint;
             state.latestFailures = checkpoint.latestFailures || [];
+            state.latestParserUsed = checkpoint.latestParserUsed || 'none';
+            state.latestLogPath = checkpoint.latestLogPath || null;
+            state.workflowName = checkpoint.workflowName || failedRun.name || '';
+            state.workflowUrl = checkpoint.workflowUrl || failedRun.htmlUrl || '';
             core.info(`Resuming checkpoint for workflow run ${checkpoint.workflowRunId}`);
         }
         else if (checkpoint) {
@@ -39734,10 +39780,12 @@ function getWorkflowRunId() {
     }
     return null;
 }
-function getInitialState(workflowRunId, branch, headSha, prNumber) {
+function getInitialState(workflowRunId, workflowName, workflowUrl, branch, headSha, prNumber) {
     return {
         runId: Date.now(),
         workflowRunId,
+        workflowName,
+        workflowUrl,
         branch,
         headSha,
         prNumber,
@@ -39747,6 +39795,8 @@ function getInitialState(workflowRunId, branch, headSha, prNumber) {
         result: null,
         commits: [],
         latestFailures: [],
+        latestParserUsed: 'none',
+        latestLogPath: null,
     };
 }
 function shouldResumeCheckpoint(checkpoint, workflowRunId, branch) {
@@ -39871,6 +39921,8 @@ exports.downloadWorkflowLogs = downloadWorkflowLogs;
 exports.getFailedJobLogs = getFailedJobLogs;
 exports.readAndParseFailures = readAndParseFailures;
 const core = __importStar(__nccwpck_require__(7484));
+const fs = __importStar(__nccwpck_require__(9896));
+const path = __importStar(__nccwpck_require__(6928));
 const strip_ansi_1 = __importDefault(__nccwpck_require__(348));
 const parsers_1 = __nccwpck_require__(692);
 async function getFailedWorkflowRun(octokit, owner, repo, workflowRunId) {
@@ -39970,13 +40022,20 @@ async function readAndParseFailures(octokit, owner, repo, runId) {
     const rawLog = await getFailedJobLogs(octokit, owner, repo, runId);
     if (!rawLog) {
         core.warning('No log content retrieved');
-        return { failures: [], rawLog: '', parserUsed: 'none' };
+        return { failures: [], rawLog: '', parserUsed: 'none', logPath: null };
     }
     const cleanLog = (0, strip_ansi_1.default)(rawLog);
+    const logPath = writeWorkflowLog(runId, cleanLog);
     core.info(`Downloaded ${cleanLog.length} bytes of logs, parsing...`);
+    if (logPath) {
+        core.info(`Saved workflow logs to ${logPath}`);
+    }
     const result = (0, parsers_1.parseLog)(cleanLog);
     core.info(`Found ${result.failures.length} failures using parsers: ${result.parserUsed}`);
-    return result;
+    return {
+        ...result,
+        logPath,
+    };
 }
 function decodeLogPayload(data) {
     if (typeof data === 'string') {
@@ -39999,6 +40058,20 @@ async function loadAdmZip() {
         return module.default;
     }
     catch {
+        return null;
+    }
+}
+function writeWorkflowLog(runId, content, workDir) {
+    try {
+        const baseDir = path.join(workDir || process.cwd(), '.greencheck', 'logs');
+        fs.mkdirSync(baseDir, { recursive: true });
+        const relativePath = path.join('.greencheck', 'logs', `workflow-run-${runId}.log`);
+        const fullPath = path.join(workDir || process.cwd(), relativePath);
+        fs.writeFileSync(fullPath, content, 'utf-8');
+        return relativePath;
+    }
+    catch (error) {
+        core.warning(`Failed to persist workflow logs locally: ${error}`);
         return null;
     }
 }
@@ -40052,7 +40125,6 @@ const ci_trigger_1 = __nccwpck_require__(4742);
 const git_ops_1 = __nccwpck_require__(7482);
 const log_reader_1 = __nccwpck_require__(561);
 const checkpoint_1 = __nccwpck_require__(4213);
-const triage_1 = __nccwpck_require__(3235);
 const glob_1 = __nccwpck_require__(5601);
 async function runFixLoop(octokit, owner, repo, state, config) {
     const runStartedAt = new Date(state.startedAt).getTime();
@@ -40073,19 +40145,14 @@ async function runFixLoop(octokit, owner, repo, state, config) {
         core.info(`${'='.repeat(60)}\n`);
         const logResult = await (0, log_reader_1.readAndParseFailures)(octokit, owner, repo, state.workflowRunId);
         state.latestFailures = logResult.failures;
-        if (logResult.failures.length === 0) {
-            core.info('No failures found in logs - CI may already be green');
-            state.result = 'success';
-            break;
+        state.latestParserUsed = logResult.parserUsed;
+        state.latestLogPath = logResult.logPath;
+        if (!logResult.rawLog) {
+            core.warning('No workflow log content was retrieved; continuing anyway so the agent can inspect the repository directly');
         }
-        const clusters = (0, triage_1.triageFailures)(logResult.failures, config);
-        if (clusters.length === 0) {
-            core.info('No fixable failure clusters after triage');
-            state.result = 'failed';
-            break;
-        }
-        const cluster = clusters[0];
-        const attempt = await fixCluster(cluster, pass, config);
+        const cluster = buildAgentCluster(logResult);
+        const context = buildAgentContext(state, logResult);
+        const attempt = await fixCluster(context, cluster, pass, config);
         state.passes.push(attempt);
         state.totalCostCents += attempt.costCents;
         if (attempt.commitSha) {
@@ -40118,11 +40185,15 @@ async function runFixLoop(octokit, owner, repo, state, config) {
         if (ciResult.conclusion === 'success') {
             core.info('CI is green. All tracked failures are fixed.');
             state.latestFailures = [];
+            state.latestParserUsed = 'none';
+            state.latestLogPath = null;
             state.result = 'success';
             break;
         }
         const newLogResult = await (0, log_reader_1.readAndParseFailures)(octokit, owner, repo, ciResult.id);
         state.latestFailures = newLogResult.failures;
+        state.latestParserUsed = newLogResult.parserUsed;
+        state.latestLogPath = newLogResult.logPath;
         const regressions = getNewFailures(logResult.failures, newLogResult.failures);
         if (regressions.length > 0 && config.safety.revertOnRegression && attempt.commitSha) {
             core.warning(`${regressions.length} new failures detected after pass ${pass}`);
@@ -40143,26 +40214,19 @@ async function runFixLoop(octokit, owner, repo, state, config) {
     }
     return state;
 }
-async function fixCluster(cluster, pass, config) {
+async function fixCluster(context, cluster, pass, config) {
     const startedAt = Date.now();
-    core.info(`Fixing ${cluster.type} cluster: ${cluster.files.join(', ')}`);
-    core.info(`Strategy: ${cluster.strategy}, Failures: ${cluster.failures.length}`);
+    const fileSummary = cluster.files.length > 0 ? cluster.files.join(', ') : 'repository-wide';
+    core.info(`Fixing workflow failure with agent-first flow (${fileSummary})`);
+    core.info(`Parsed hints: ${cluster.failures.length}, parserUsed: ${context.parserUsed}`);
     try {
-        const invocation = await (0, agent_1.invokeAgent)(cluster, config, process.cwd());
+        const invocation = await (0, agent_1.invokeAgent)(context, cluster, config, process.cwd());
         if (invocation.exitCode !== 0) {
             core.warning(`Agent exited with ${invocation.exitCode}; checking whether it still produced usable changes`);
         }
-        const allowedFiles = new Set(cluster.files.map(glob_1.normalizePath));
         const changedFiles = await (0, git_ops_1.getChangedFiles)();
-        const normalizedChangedFiles = changedFiles.map(glob_1.normalizePath);
-        const unexpectedFiles = changedFiles.filter((file, index) => !allowedFiles.has(normalizedChangedFiles[index]));
-        if (unexpectedFiles.length > 0) {
-            core.warning(`Discarding out-of-scope file changes: ${unexpectedFiles.join(', ')}`);
-            await (0, git_ops_1.discardChangesForFiles)(unexpectedFiles);
-        }
-        const remainingFiles = (await (0, git_ops_1.getChangedFiles)()).filter((file) => allowedFiles.has((0, glob_1.normalizePath)(file)));
-        if (remainingFiles.length === 0) {
-            core.warning('Agent produced no in-scope changes');
+        if (changedFiles.length === 0) {
+            core.warning('Agent produced no changes');
             return {
                 pass,
                 cluster,
@@ -40174,13 +40238,18 @@ async function fixCluster(cluster, pass, config) {
                 durationMs: Date.now() - startedAt,
             };
         }
-        const commitSha = config.dryRun ? null : await (0, git_ops_1.commitFix)(cluster, pass, config);
+        const commitResult = config.dryRun
+            ? { commitSha: null, filesCommitted: changedFiles }
+            : await (0, git_ops_1.commitFix)(cluster, pass, config);
+        if (!config.dryRun && commitResult.filesCommitted.length === 0) {
+            core.warning('Agent changes could not be committed after protected-file filtering');
+        }
         return {
             pass,
             cluster,
-            commitSha,
-            filesChanged: remainingFiles,
-            result: commitSha || config.dryRun ? 'fixed' : 'failed',
+            commitSha: commitResult.commitSha,
+            filesChanged: commitResult.filesCommitted,
+            result: commitResult.commitSha || config.dryRun ? 'fixed' : 'failed',
             newFailures: [],
             costCents: invocation.costCents,
             durationMs: Date.now() - startedAt,
@@ -40220,13 +40289,40 @@ async function revertRegressiveCommit(octokit, owner, repo, state, commitSha, co
     state.headSha = revertedRun.headSha;
     if (revertedRun.conclusion === 'success') {
         state.latestFailures = [];
+        state.latestParserUsed = 'none';
+        state.latestLogPath = null;
         state.result = 'success';
         return true;
     }
     const revertedLogResult = await (0, log_reader_1.readAndParseFailures)(octokit, owner, repo, revertedRun.id);
     state.latestFailures = revertedLogResult.failures;
+    state.latestParserUsed = revertedLogResult.parserUsed;
+    state.latestLogPath = revertedLogResult.logPath;
     (0, checkpoint_1.saveCheckpoint)(state);
     return true;
+}
+function buildAgentCluster(logResult) {
+    const files = [...new Set(logResult.failures.map((failure) => (0, glob_1.normalizePath)(failure.file)))].slice(0, 20);
+    const type = logResult.failures[0]?.type || 'unknown';
+    return {
+        type,
+        files,
+        failures: logResult.failures,
+        strategy: 'llm',
+    };
+}
+function buildAgentContext(state, logResult) {
+    return {
+        workflowRunId: state.workflowRunId,
+        workflowName: state.workflowName,
+        workflowUrl: state.workflowUrl,
+        branch: state.branch,
+        headSha: state.headSha,
+        parserUsed: logResult.parserUsed,
+        logPath: logResult.logPath,
+        rawLog: logResult.rawLog,
+        parsedFailures: logResult.failures,
+    };
 }
 function getNewFailures(previous, next) {
     const previousKeys = new Set(previous.map(getFailureKey));
@@ -40445,6 +40541,7 @@ function parseLog(rawLog) {
         failures: deduplicated,
         rawLog: cleanLog,
         parserUsed: parsersUsed.join(', ') || 'none',
+        logPath: null,
     };
 }
 var eslint_2 = __nccwpck_require__(5939);
@@ -40844,8 +40941,11 @@ function buildPRCommentBody(state) {
     if (state.passes.length > 0) {
         body += '### Fix Summary\n\n';
         for (const pass of state.passes) {
-            body += `**Pass ${pass.pass}** - ${pass.result} - ${pass.cluster.type} in \`${pass.cluster.files.join('`, `')}\`\n`;
-            body += `- ${pass.cluster.failures.length} failure(s) addressed\n`;
+            const scopeLabel = pass.cluster.files.length > 0
+                ? `in \`${pass.cluster.files.join('`, `')}\``
+                : 'with repository-wide investigation';
+            body += `**Pass ${pass.pass}** - ${pass.result} - ${pass.cluster.type} ${scopeLabel}\n`;
+            body += `- ${pass.cluster.failures.length} parsed failure hint(s) addressed\n`;
             if (pass.commitSha) {
                 body += `- Commit: \`${pass.commitSha.substring(0, 7)}\`\n`;
             }
@@ -40882,6 +40982,7 @@ function buildJobSummary(state) {
             : 'Failed';
     let summary = `## greencheck: ${status}\n\n`;
     summary += `- **Branch:** \`${state.branch}\`\n`;
+    summary += `- **Workflow:** ${state.workflowName || 'unknown'}\n`;
     summary += `- **Passes:** ${state.passes.length}\n`;
     summary += `- **Cost:** ${formatCost(state.totalCostCents)}\n`;
     summary += `- **Commits:** ${state.commits.map((sha) => `\`${sha.substring(0, 7)}\``).join(', ') || 'none'}\n`;
@@ -40889,8 +40990,8 @@ function buildJobSummary(state) {
     for (const pass of state.passes) {
         summary += `### Pass ${pass.pass}: ${pass.result}\n`;
         summary += `- Type: ${pass.cluster.type}\n`;
-        summary += `- Files: ${pass.cluster.files.join(', ')}\n`;
-        summary += `- Failures: ${pass.cluster.failures.length}\n\n`;
+        summary += `- Files: ${pass.cluster.files.join(', ') || 'repository-wide'}\n`;
+        summary += `- Parsed failure hints: ${pass.cluster.failures.length}\n\n`;
     }
     return summary;
 }
@@ -41008,194 +41109,6 @@ async function report(octokit, owner, repo, state, config) {
     core.setOutput('failures-fixed', state.passes.filter((pass) => pass.result === 'fixed').reduce((sum, pass) => sum + pass.cluster.failures.length, 0));
     core.setOutput('commits', state.commits.join(','));
     core.setOutput('cost', formatCost(state.totalCostCents));
-}
-
-
-/***/ }),
-
-/***/ 3235:
-/***/ (function(__unused_webpack_module, exports, __nccwpck_require__) {
-
-"use strict";
-
-var __createBinding = (this && this.__createBinding) || (Object.create ? (function(o, m, k, k2) {
-    if (k2 === undefined) k2 = k;
-    var desc = Object.getOwnPropertyDescriptor(m, k);
-    if (!desc || ("get" in desc ? !m.__esModule : desc.writable || desc.configurable)) {
-      desc = { enumerable: true, get: function() { return m[k]; } };
-    }
-    Object.defineProperty(o, k2, desc);
-}) : (function(o, m, k, k2) {
-    if (k2 === undefined) k2 = k;
-    o[k2] = m[k];
-}));
-var __setModuleDefault = (this && this.__setModuleDefault) || (Object.create ? (function(o, v) {
-    Object.defineProperty(o, "default", { enumerable: true, value: v });
-}) : function(o, v) {
-    o["default"] = v;
-});
-var __importStar = (this && this.__importStar) || (function () {
-    var ownKeys = function(o) {
-        ownKeys = Object.getOwnPropertyNames || function (o) {
-            var ar = [];
-            for (var k in o) if (Object.prototype.hasOwnProperty.call(o, k)) ar[ar.length] = k;
-            return ar;
-        };
-        return ownKeys(o);
-    };
-    return function (mod) {
-        if (mod && mod.__esModule) return mod;
-        var result = {};
-        if (mod != null) for (var k = ownKeys(mod), i = 0; i < k.length; i++) if (k[i] !== "default") __createBinding(result, mod, k[i]);
-        __setModuleDefault(result, mod);
-        return result;
-    };
-})();
-Object.defineProperty(exports, "__esModule", ({ value: true }));
-exports.clusterFailures = clusterFailures;
-exports.prioritizeClusters = prioritizeClusters;
-exports.filterByConfig = filterByConfig;
-exports.triageFailures = triageFailures;
-const core = __importStar(__nccwpck_require__(7484));
-const glob_1 = __nccwpck_require__(5601);
-const FIXABILITY_ORDER = [
-    'lint',
-    'type-error',
-    'test-failure',
-    'build-error',
-    'runtime-error',
-    'unknown',
-];
-function getStrategy(type, failures) {
-    switch (type) {
-        case 'lint': {
-            const hasAutoFixable = failures.some((failure) => failure.rule !== null &&
-                [
-                    'no-unused-vars',
-                    'semi',
-                    'quotes',
-                    'indent',
-                    'comma-dangle',
-                    'eol-last',
-                    'no-trailing-spaces',
-                    'no-multiple-empty-lines',
-                ].includes(failure.rule));
-            return hasAutoFixable ? 'deterministic+llm' : 'llm';
-        }
-        case 'test-failure':
-            return failures.some((failure) => failure.rule === 'snapshot') ? 'deterministic+llm' : 'llm';
-        default:
-            return 'llm';
-    }
-}
-function clusterFailures(failures) {
-    const byType = new Map();
-    for (const failure of failures) {
-        const existing = byType.get(failure.type) || [];
-        existing.push({
-            ...failure,
-            file: (0, glob_1.normalizePath)(failure.file),
-        });
-        byType.set(failure.type, existing);
-    }
-    const clusters = [];
-    for (const [type, typeFailures] of byType) {
-        const byFile = new Map();
-        for (const failure of typeFailures) {
-            const existing = byFile.get(failure.file) || [];
-            existing.push(failure);
-            byFile.set(failure.file, existing);
-        }
-        const fileGroups = [];
-        const visited = new Set();
-        for (const [file, fileFailures] of byFile) {
-            if (visited.has(file)) {
-                continue;
-            }
-            visited.add(file);
-            const group = new Map();
-            group.set(file, fileFailures);
-            const directory = getDirectory(file);
-            for (const [otherFile, otherFailures] of byFile) {
-                if (visited.has(otherFile)) {
-                    continue;
-                }
-                if (directory === getDirectory(otherFile)) {
-                    visited.add(otherFile);
-                    group.set(otherFile, otherFailures);
-                }
-            }
-            fileGroups.push(group);
-        }
-        for (const group of fileGroups) {
-            const groupedFailures = Array.from(group.values()).flat();
-            const files = Array.from(group.keys());
-            clusters.push({
-                type,
-                files,
-                failures: groupedFailures,
-                strategy: getStrategy(type, groupedFailures),
-            });
-        }
-    }
-    return clusters;
-}
-function prioritizeClusters(clusters) {
-    return [...clusters].sort((a, b) => {
-        const aIdx = FIXABILITY_ORDER.indexOf(a.type);
-        const bIdx = FIXABILITY_ORDER.indexOf(b.type);
-        if (aIdx !== bIdx) {
-            return aIdx - bIdx;
-        }
-        if (a.strategy !== b.strategy) {
-            if (a.strategy === 'deterministic')
-                return -1;
-            if (b.strategy === 'deterministic')
-                return 1;
-            if (a.strategy === 'deterministic+llm')
-                return -1;
-            if (b.strategy === 'deterministic+llm')
-                return 1;
-        }
-        return averageConfidence(b.failures) - averageConfidence(a.failures);
-    });
-}
-function filterByConfig(clusters, config) {
-    const allowedTypes = config.fixTypes === 'all' ? FIXABILITY_ORDER : config.fixTypes;
-    return clusters
-        .filter((cluster) => allowedTypes.includes(cluster.type))
-        .map((cluster) => ({
-        ...cluster,
-        files: cluster.files.filter((file) => !isProtectedFile(file, config.safety.neverTouchFiles)),
-        failures: cluster.failures.filter((failure) => !isProtectedFile(failure.file, config.safety.neverTouchFiles)),
-    }))
-        .filter((cluster) => cluster.failures.length > 0 && cluster.files.length <= config.safety.maxFilesPerFix);
-}
-function triageFailures(failures, config) {
-    core.info(`Triaging ${failures.length} failures...`);
-    const clusters = clusterFailures(failures);
-    core.info(`Grouped into ${clusters.length} clusters`);
-    const filtered = filterByConfig(clusters, config);
-    core.info(`${filtered.length} clusters after filtering by config`);
-    const prioritized = prioritizeClusters(filtered);
-    for (const cluster of prioritized) {
-        core.info(`  [${cluster.type}] ${cluster.files.join(', ')} - ${cluster.failures.length} failures - strategy: ${cluster.strategy}`);
-    }
-    return prioritized;
-}
-function isProtectedFile(file, patterns) {
-    return patterns.some((pattern) => (0, glob_1.matchesGlob)(file, pattern));
-}
-function getDirectory(file) {
-    const normalized = (0, glob_1.normalizePath)(file);
-    const lastSlash = normalized.lastIndexOf('/');
-    return lastSlash === -1 ? '' : normalized.slice(0, lastSlash);
-}
-function averageConfidence(failures) {
-    if (failures.length === 0) {
-        return 0;
-    }
-    return failures.reduce((sum, failure) => sum + failure.confidence, 0) / failures.length;
 }
 
 

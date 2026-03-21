@@ -82,6 +82,7 @@ export function parseLog(rawLog: string): LogParserResult {
     failures: deduplicated,
     rawLog: cleanLog,
     parserUsed: parsersUsed.join(', ') || 'none',
+    logPath: null,
   };
 }
 export { parseEslint } from './eslint';

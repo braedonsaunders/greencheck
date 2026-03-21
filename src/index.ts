@@ -86,11 +86,22 @@ async function run(): Promise<void> {
       return;
     }
 
-    let state = getInitialState(failedRun.id, failedRun.headBranch, failedRun.headSha, prNumber);
+    let state = getInitialState(
+      failedRun.id,
+      failedRun.name,
+      failedRun.htmlUrl,
+      failedRun.headBranch,
+      failedRun.headSha,
+      prNumber,
+    );
     const checkpoint = loadCheckpoint();
     if (checkpoint && shouldResumeCheckpoint(checkpoint, failedRun.id, failedRun.headBranch)) {
       state = checkpoint;
       state.latestFailures = checkpoint.latestFailures || [];
+      state.latestParserUsed = checkpoint.latestParserUsed || 'none';
+      state.latestLogPath = checkpoint.latestLogPath || null;
+      state.workflowName = checkpoint.workflowName || failedRun.name || '';
+      state.workflowUrl = checkpoint.workflowUrl || failedRun.htmlUrl || '';
       core.info(`Resuming checkpoint for workflow run ${checkpoint.workflowRunId}`);
     } else if (checkpoint) {
       core.info('Ignoring checkpoint because it does not match the current workflow run');
@@ -146,6 +157,8 @@ function getWorkflowRunId(): number | null {
 
 function getInitialState(
   workflowRunId: number,
+  workflowName: string,
+  workflowUrl: string,
   branch: string,
   headSha: string,
   prNumber: number | null,
@@ -153,6 +166,8 @@ function getInitialState(
   return {
     runId: Date.now(),
     workflowRunId,
+    workflowName,
+    workflowUrl,
     branch,
     headSha,
     prNumber,
@@ -162,6 +177,8 @@ function getInitialState(
     result: null,
     commits: [],
     latestFailures: [],
+    latestParserUsed: 'none',
+    latestLogPath: null,
   };
 }
 

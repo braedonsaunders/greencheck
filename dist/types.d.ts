@@ -20,6 +20,17 @@ export interface FailureCluster {
     failures: FailureRecord[];
     strategy: FixStrategy;
 }
+export interface AgentContext {
+    workflowRunId: number;
+    workflowName: string;
+    workflowUrl: string;
+    branch: string;
+    headSha: string;
+    parserUsed: string;
+    logPath: string | null;
+    rawLog: string;
+    parsedFailures: FailureRecord[];
+}
 export interface GreenCheckConfig {
     agent: AgentType;
     agentApiKey: string | null;
@@ -89,6 +100,8 @@ export interface FixAttempt {
 export interface RunState {
     runId: number;
     workflowRunId: number;
+    workflowName: string;
+    workflowUrl: string;
     branch: string;
     headSha: string;
     prNumber: number | null;
@@ -98,6 +111,8 @@ export interface RunState {
     result: RunResult | null;
     commits: string[];
     latestFailures: FailureRecord[];
+    latestParserUsed: string;
+    latestLogPath: string | null;
 }
 export interface AgentInvocation {
     agent: AgentType;
@@ -115,4 +130,5 @@ export interface LogParserResult {
     failures: FailureRecord[];
     rawLog: string;
     parserUsed: string;
+    logPath: string | null;
 }

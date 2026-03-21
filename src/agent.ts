@@ -1,8 +1,8 @@
 import * as core from '@actions/core';
 import * as exec from '@actions/exec';
-import { AgentInvocation, FailureCluster, GreenCheckConfig } from './types';
+import { AgentContext, AgentInvocation, FailureCluster, GreenCheckConfig } from './types';
 
-function buildPrompt(cluster: FailureCluster): string {
+function buildPrompt(context: AgentContext, cluster: FailureCluster): string {
   const failureList = cluster.failures
     .map((failure, index) => {
       const location = failure.line
@@ -12,23 +12,52 @@ function buildPrompt(cluster: FailureCluster): string {
       return `${index + 1}. ${cluster.type}${rule} at ${location} - ${failure.message}`;
     })
     .join('\n');
+  const hintSection = cluster.failures.length > 0
+    ? `## Parsed hints from greencheck
+These are optional hints only. Treat them as a starting point, not ground truth.
 
-  const fileList = cluster.files.map((file) => `- ${file}`).join('\n');
-
-  return `Fix the following CI failures in this repository.
-
-## Files in scope
-${fileList}
-
-## Failures
 ${failureList}
+`
+    : `## Parsed hints from greencheck
+No structured failures were extracted from the logs. You need to inspect the workflow logs and the repository yourself.
+`;
+
+  const likelyFiles = cluster.files.length > 0
+    ? cluster.files.map((file) => `- ${file}`).join('\n')
+    : '- None identified by parsing';
+
+  const logAccess = context.logPath
+    ? `- Full workflow logs are saved locally at \`${context.logPath}\``
+    : '- Full workflow logs could not be saved locally; rely on git history, workflow files, and repo tooling';
+
+  return `A GitHub Actions workflow failed for this repository. Take control immediately, investigate the failure, make the smallest reasonable fix, and verify it before you finish.
+
+## Workflow context
+- Workflow run id: ${context.workflowRunId}
+- Workflow name: ${context.workflowName || 'unknown'}
+- Workflow URL: ${context.workflowUrl || 'unknown'}
+- Branch: ${context.branch}
+- Commit SHA: ${context.headSha}
+${logAccess}
+- Parser(s) that matched: ${context.parserUsed}
+
+## Likely files from parsed hints
+${likelyFiles}
+
+${hintSection}
+## What you should do
+- Start from the failed CI context above.
+- Read the saved workflow log file yourself if it exists.
+- Inspect the repository's workflow files, scripts, package configuration, and source code as needed.
+- Run the repository's own tests, linting, typechecking, or other narrow verification commands to confirm the fix.
+- If the failure is ambiguous, investigate until you have a defensible fix instead of guessing from the parser output.
 
 ## Constraints
-- Fix only the failures listed above.
-- Do not modify files outside the scope list unless a generated lockfile changes as a direct result of the fix.
-- Prefer the smallest possible code change.
-- Do not add new dependencies unless the failure cannot be resolved without them.
-- Run the narrowest verification you can for the changed area before you finish.`;
+- You have repository-wide edit access. Do not treat the parsed file list as a hard scope.
+- Prefer the smallest reasonable code change that makes CI pass.
+- Do not add dependencies unless the failure genuinely requires it.
+- Avoid changing protected files like lockfiles or secrets unless absolutely necessary; greencheck may discard those edits before commit.
+- Before finishing, run the narrowest verification you can and leave the repo in a state that should pass CI.`;
 }
 
 async function commandExists(command: string): Promise<boolean> {
@@ -168,12 +197,13 @@ function estimateCost(totalChars: number, agent: 'claude' | 'codex'): number {
 }
 
 export async function invokeAgent(
+  context: AgentContext,
   cluster: FailureCluster,
   config: GreenCheckConfig,
   workDir: string,
 ): Promise<AgentInvocation> {
-  const prompt = buildPrompt(cluster);
-  core.info(`Invoking ${config.agent} for ${cluster.type} failures in ${cluster.files.join(', ')}`);
+  const prompt = buildPrompt(context, cluster);
+  core.info(`Invoking ${config.agent} for workflow run ${context.workflowRunId} on ${context.branch}`);
 
   const installed = await installAgent(config.agent);
   if (!installed) {

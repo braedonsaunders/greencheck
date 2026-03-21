@@ -38,8 +38,11 @@ function buildPRCommentBody(state: RunState): string {
   if (state.passes.length > 0) {
     body += '### Fix Summary\n\n';
     for (const pass of state.passes) {
-      body += `**Pass ${pass.pass}** - ${pass.result} - ${pass.cluster.type} in \`${pass.cluster.files.join('`, `')}\`\n`;
-      body += `- ${pass.cluster.failures.length} failure(s) addressed\n`;
+      const scopeLabel = pass.cluster.files.length > 0
+        ? `in \`${pass.cluster.files.join('`, `')}\``
+        : 'with repository-wide investigation';
+      body += `**Pass ${pass.pass}** - ${pass.result} - ${pass.cluster.type} ${scopeLabel}\n`;
+      body += `- ${pass.cluster.failures.length} parsed failure hint(s) addressed\n`;
       if (pass.commitSha) {
         body += `- Commit: \`${pass.commitSha.substring(0, 7)}\`\n`;
       }
@@ -80,6 +83,7 @@ function buildJobSummary(state: RunState): string {
 
   let summary = `## greencheck: ${status}\n\n`;
   summary += `- **Branch:** \`${state.branch}\`\n`;
+  summary += `- **Workflow:** ${state.workflowName || 'unknown'}\n`;
   summary += `- **Passes:** ${state.passes.length}\n`;
   summary += `- **Cost:** ${formatCost(state.totalCostCents)}\n`;
   summary += `- **Commits:** ${state.commits.map((sha) => `\`${sha.substring(0, 7)}\``).join(', ') || 'none'}\n`;
@@ -88,8 +92,8 @@ function buildJobSummary(state: RunState): string {
   for (const pass of state.passes) {
     summary += `### Pass ${pass.pass}: ${pass.result}\n`;
     summary += `- Type: ${pass.cluster.type}\n`;
-    summary += `- Files: ${pass.cluster.files.join(', ')}\n`;
-    summary += `- Failures: ${pass.cluster.failures.length}\n\n`;
+    summary += `- Files: ${pass.cluster.files.join(', ') || 'repository-wide'}\n`;
+    summary += `- Parsed failure hints: ${pass.cluster.failures.length}\n\n`;
   }
 
   return summary;

@@ -5,7 +5,7 @@
 <h1 align="center">greencheck</h1>
 
 <p align="center">
-  <strong>A GitHub Action that reads failed CI logs, asks a coding agent for the smallest fix, commits it, and waits for CI again.</strong>
+  <strong>A GitHub Action that hands a failed CI run to a coding agent, lets it inspect the repo and logs directly, commits the fix, and waits for CI again.</strong>
 </p>
 
 <p align="center">
@@ -32,21 +32,22 @@
 Most CI failures are small — a missing semicolon, a type mismatch, a renamed import. You know the fix in seconds, but the context-switch costs minutes. greencheck eliminates that friction:
 
 - **Zero human intervention** — push code, go back to what you were doing
-- **Scoped and safe** — it only touches files related to the failure, never lockfiles or secrets
+- **Agent-first investigation** — the LLM gets the failed run, raw logs, and the repo immediately
+- **Safe by default** — protected files like lockfiles and secrets can still be filtered before commit
 - **Self-correcting** — if a fix introduces a regression, it automatically reverts
 - **Cost-controlled** — hard limits on spend and runtime, with detailed cost reporting
-- **Works with your stack** — parses logs from ESLint, TypeScript, Jest, Vitest, Pytest, Go, and Rust out of the box
+- **Helpful hints when available** — log parsers for ESLint, TypeScript, Jest, Vitest, Pytest, Go, and Rust still provide extra signal
 
 greencheck is not trying to be an AI developer. It's a surgical CI repair tool that fixes the obvious stuff so you don't have to.
 
 ## What It Does
 
-`greencheck` watches failed GitHub Actions runs, turns the logs into structured failures, asks [Claude Code](https://docs.anthropic.com/en/docs/claude-code) or [Codex](https://openai.com/index/codex/) for a targeted fix, commits the patch, and waits for CI to run again.
+`greencheck` watches failed GitHub Actions runs, downloads the logs, saves them into the workspace, and gives [Claude Code](https://docs.anthropic.com/en/docs/claude-code) or [Codex](https://openai.com/index/codex/) immediate control to investigate, fix, verify, and wait for CI to run again.
 
 It is designed for `workflow_run`-based remediation flows and includes:
 
-- **Multi-language log parsing** — ESLint, Biome, TypeScript, Jest, Vitest, Pytest, Go, and Rust
-- **Scoped commits** — out-of-scope edits are filtered; only relevant changes land
+- **Multi-language log hints** — ESLint, Biome, TypeScript, Jest, Vitest, Pytest, Go, and Rust
+- **Raw log handoff** — failed workflow logs are saved under `.greencheck/logs/` for the agent to inspect directly
 - **Regression detection** — new failures after a fix trigger an automatic revert
 - **Reporting** — PR comments, GitHub Actions job summaries, and Slack notifications
 - **Safety guardrails** — cost limits, timeouts, protected files, stale-context detection
@@ -117,17 +118,17 @@ A complete example workflow lives at [`examples/greencheck.workflow.yml`](exampl
 ## How It Works
 
 ```
-CI fails → greencheck downloads logs → parses into structured failures
-  → clusters by type & directory → picks highest-priority cluster
-  → invokes Claude Code / Codex with a scoped prompt
-  → filters out-of-scope edits → commits in-scope changes
+CI fails → greencheck downloads logs and saves them into .greencheck/logs/
+  → invokes Claude Code / Codex with the failed run context immediately
+  → agent inspects logs, repo code, workflows, and runs its own verification
+  → greencheck filters protected-file edits, commits safe changes
   → pushes → waits for CI → repeats if needed
 ```
 
 1. A monitored workflow finishes with `failure`.
-2. greencheck downloads the failed job logs and parses them into structured failures.
-3. It prioritizes the next fixable cluster and invokes Claude Code or Codex with a narrow prompt.
-4. If the agent edits files outside the failure scope, greencheck discards those edits and only commits the remaining in-scope changes.
+2. greencheck downloads the failed job logs, saves them locally, and optionally parses them into hints.
+3. It invokes Claude Code or Codex right away with the workflow metadata, raw log path, and any parsed hints.
+4. The agent investigates the failure itself, including running the repository's own tests, linting, or typechecks as needed.
 5. It pushes the fix and waits for the next workflow run on that commit.
 6. If new failures appear, it reverts the regressive commit and continues.
 7. The action refuses to operate on stale logs — if the branch has advanced since the failed run, it exits.
@@ -213,7 +214,7 @@ safety:
 
 - **Stale context rejection** — skips if the branch moved past the failed commit
 - **Protected file filtering** — never modifies lockfiles, `.env`, or custom patterns
-- **Out-of-scope edit filtering** — discards agent changes to files not in the failure cluster
+- **Protected file filtering** — discards agent changes to files matching protected patterns before commit
 - **Regression revert** — automatically reverts commits that introduce new failures
 - **Cost and time limits** — hard caps on spend and wall-clock time
 - **Auto-merge safety** — requires PR approval, optional label gating, protected branch patterns
@@ -251,7 +252,7 @@ greencheck auto-installs Claude Code or Codex via `npm install -g`. If this fail
 ```
 
 **No failures found in logs**
-The CI log format may not match any parser. [Open an issue](https://github.com/braedonsaunders/greencheck/issues/new?template=bug_report.yml) with the log snippet and we'll add support.
+greencheck still hands control to the agent and saves the raw workflow logs under `.greencheck/logs/`. Parsers are only hints now. If the agent was missing useful structure, [open an issue](https://github.com/braedonsaunders/greencheck/issues/new?template=bug_report.yml) with the log snippet and we'll add support.
 
 ## Agent Skill
 

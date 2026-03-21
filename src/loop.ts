@@ -2,11 +2,10 @@ import * as core from '@actions/core';
 import * as github from '@actions/github';
 import { invokeAgent } from './agent';
 import { waitForWorkflowCompletion } from './ci-trigger';
-import { discardAllChanges, discardChangesForFiles, getChangedFiles, getCurrentSha, pushChanges, revertCommit, commitFix } from './git-ops';
+import { discardAllChanges, getChangedFiles, getCurrentSha, pushChanges, revertCommit, commitFix } from './git-ops';
 import { readAndParseFailures } from './log-reader';
 import { saveCheckpoint } from './checkpoint';
-import { triageFailures } from './triage';
-import { FailureCluster, FailureRecord, FixAttempt, GreenCheckConfig, RunState } from './types';
+import { AgentContext, FailureCluster, FailureRecord, FixAttempt, GreenCheckConfig, LogParserResult, RunState } from './types';
 import { normalizePath } from './glob';
 
 type Octokit = ReturnType<typeof github.getOctokit>;
@@ -40,22 +39,16 @@ export async function runFixLoop(
 
     const logResult = await readAndParseFailures(octokit, owner, repo, state.workflowRunId);
     state.latestFailures = logResult.failures;
+    state.latestParserUsed = logResult.parserUsed;
+    state.latestLogPath = logResult.logPath;
 
-    if (logResult.failures.length === 0) {
-      core.info('No failures found in logs - CI may already be green');
-      state.result = 'success';
-      break;
+    if (!logResult.rawLog) {
+      core.warning('No workflow log content was retrieved; continuing anyway so the agent can inspect the repository directly');
     }
 
-    const clusters = triageFailures(logResult.failures, config);
-    if (clusters.length === 0) {
-      core.info('No fixable failure clusters after triage');
-      state.result = 'failed';
-      break;
-    }
-
-    const cluster = clusters[0];
-    const attempt = await fixCluster(cluster, pass, config);
+    const cluster = buildAgentCluster(logResult);
+    const context = buildAgentContext(state, logResult);
+    const attempt = await fixCluster(context, cluster, pass, config);
     state.passes.push(attempt);
     state.totalCostCents += attempt.costCents;
     if (attempt.commitSha) {
@@ -102,12 +95,16 @@ export async function runFixLoop(
     if (ciResult.conclusion === 'success') {
       core.info('CI is green. All tracked failures are fixed.');
       state.latestFailures = [];
+      state.latestParserUsed = 'none';
+      state.latestLogPath = null;
       state.result = 'success';
       break;
     }
 
     const newLogResult = await readAndParseFailures(octokit, owner, repo, ciResult.id);
     state.latestFailures = newLogResult.failures;
+    state.latestParserUsed = newLogResult.parserUsed;
+    state.latestLogPath = newLogResult.logPath;
 
     const regressions = getNewFailures(logResult.failures, newLogResult.failures);
     if (regressions.length > 0 && config.safety.revertOnRegression && attempt.commitSha) {
@@ -144,36 +141,26 @@ export async function runFixLoop(
 }
 
 async function fixCluster(
+  context: AgentContext,
   cluster: FailureCluster,
   pass: number,
   config: GreenCheckConfig,
 ): Promise<FixAttempt> {
   const startedAt = Date.now();
 
-  core.info(`Fixing ${cluster.type} cluster: ${cluster.files.join(', ')}`);
-  core.info(`Strategy: ${cluster.strategy}, Failures: ${cluster.failures.length}`);
+  const fileSummary = cluster.files.length > 0 ? cluster.files.join(', ') : 'repository-wide';
+  core.info(`Fixing workflow failure with agent-first flow (${fileSummary})`);
+  core.info(`Parsed hints: ${cluster.failures.length}, parserUsed: ${context.parserUsed}`);
 
   try {
-    const invocation = await invokeAgent(cluster, config, process.cwd());
+    const invocation = await invokeAgent(context, cluster, config, process.cwd());
     if (invocation.exitCode !== 0) {
       core.warning(`Agent exited with ${invocation.exitCode}; checking whether it still produced usable changes`);
     }
 
-    const allowedFiles = new Set(cluster.files.map(normalizePath));
     const changedFiles = await getChangedFiles();
-    const normalizedChangedFiles = changedFiles.map(normalizePath);
-
-    const unexpectedFiles = changedFiles.filter(
-      (file, index) => !allowedFiles.has(normalizedChangedFiles[index]),
-    );
-    if (unexpectedFiles.length > 0) {
-      core.warning(`Discarding out-of-scope file changes: ${unexpectedFiles.join(', ')}`);
-      await discardChangesForFiles(unexpectedFiles);
-    }
-
-    const remainingFiles = (await getChangedFiles()).filter((file) => allowedFiles.has(normalizePath(file)));
-    if (remainingFiles.length === 0) {
-      core.warning('Agent produced no in-scope changes');
+    if (changedFiles.length === 0) {
+      core.warning('Agent produced no changes');
       return {
         pass,
         cluster,
@@ -186,14 +173,20 @@ async function fixCluster(
       };
     }
 
-    const commitSha = config.dryRun ? null : await commitFix(cluster, pass, config);
+    const commitResult = config.dryRun
+      ? { commitSha: null, filesCommitted: changedFiles }
+      : await commitFix(cluster, pass, config);
+
+    if (!config.dryRun && commitResult.filesCommitted.length === 0) {
+      core.warning('Agent changes could not be committed after protected-file filtering');
+    }
 
     return {
       pass,
       cluster,
-      commitSha,
-      filesChanged: remainingFiles,
-      result: commitSha || config.dryRun ? 'fixed' : 'failed',
+      commitSha: commitResult.commitSha,
+      filesChanged: commitResult.filesCommitted,
+      result: commitResult.commitSha || config.dryRun ? 'fixed' : 'failed',
       newFailures: [],
       costCents: invocation.costCents,
       durationMs: Date.now() - startedAt,
@@ -255,14 +248,44 @@ async function revertRegressiveCommit(
 
   if (revertedRun.conclusion === 'success') {
     state.latestFailures = [];
+    state.latestParserUsed = 'none';
+    state.latestLogPath = null;
     state.result = 'success';
     return true;
   }
 
   const revertedLogResult = await readAndParseFailures(octokit, owner, repo, revertedRun.id);
   state.latestFailures = revertedLogResult.failures;
+  state.latestParserUsed = revertedLogResult.parserUsed;
+  state.latestLogPath = revertedLogResult.logPath;
   saveCheckpoint(state);
   return true;
+}
+
+function buildAgentCluster(logResult: LogParserResult): FailureCluster {
+  const files = [...new Set(logResult.failures.map((failure) => normalizePath(failure.file)))].slice(0, 20);
+  const type = logResult.failures[0]?.type || 'unknown';
+
+  return {
+    type,
+    files,
+    failures: logResult.failures,
+    strategy: 'llm',
+  };
+}
+
+function buildAgentContext(state: RunState, logResult: LogParserResult): AgentContext {
+  return {
+    workflowRunId: state.workflowRunId,
+    workflowName: state.workflowName,
+    workflowUrl: state.workflowUrl,
+    branch: state.branch,
+    headSha: state.headSha,
+    parserUsed: logResult.parserUsed,
+    logPath: logResult.logPath,
+    rawLog: logResult.rawLog,
+    parsedFailures: logResult.failures,
+  };
 }
 
 function getNewFailures(previous: FailureRecord[], next: FailureRecord[]): FailureRecord[] {

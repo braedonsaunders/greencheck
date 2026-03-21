@@ -71,11 +71,11 @@ export async function commitFix(
   passNumber: number,
   config: GreenCheckConfig,
   cwd?: string,
-): Promise<string | null> {
+): Promise<{ commitSha: string | null; filesCommitted: string[] }> {
   const changedFiles = await getChangedFiles(cwd);
   if (changedFiles.length === 0) {
     core.info('No changes to commit');
-    return null;
+    return { commitSha: null, filesCommitted: [] };
   }
 
   const safeFiles = changedFiles.filter(
@@ -85,7 +85,7 @@ export async function commitFix(
   if (safeFiles.length === 0) {
     core.warning('All changed files are protected, discarding changes');
     await discardAllChanges(cwd);
-    return null;
+    return { commitSha: null, filesCommitted: [] };
   }
 
   const protectedFiles = changedFiles.filter(
@@ -109,15 +109,22 @@ export async function commitFix(
   const truncated = cluster.failures.length > 5
     ? `\n  ... and ${cluster.failures.length - 5} more`
     : '';
+  const scopeLabel = cluster.files.length > 0 ? cluster.files.join(', ') : 'repository';
+  const summaryHeader = cluster.failures.length > 0
+    ? `Fixed ${cluster.failures.length} ${cluster.type} failure(s) related to ${scopeLabel}`
+    : `Investigated workflow failure and updated ${scopeLabel}`;
+  const failuresSection = cluster.failures.length > 0
+    ? `Failures addressed:
+${failuresSummary}${truncated}
+
+`
+    : '';
 
   const message = `greencheck: fix ${cluster.type} failures (pass ${passNumber})
 
-Fixed ${cluster.failures.length} ${cluster.type} failure(s) in ${cluster.files.join(', ')}
+${summaryHeader}
 
-Failures addressed:
-${failuresSummary}${truncated}
-
-Automated fix by greencheck - https://github.com/braedonsaunders/greencheck`;
+${failuresSection}Automated fix by greencheck - https://github.com/braedonsaunders/greencheck`;
 
   await git(['config', 'user.name', 'greencheck[bot]'], cwd);
   await git(['config', 'user.email', 'greencheck[bot]@users.noreply.github.com'], cwd);
@@ -125,12 +132,15 @@ Automated fix by greencheck - https://github.com/braedonsaunders/greencheck`;
   const commitResult = await git(['commit', '-m', message], cwd);
   if (commitResult.exitCode !== 0) {
     core.error(`Commit failed: ${commitResult.stderr}`);
-    return null;
+    return { commitSha: null, filesCommitted: [] };
   }
 
   const shaResult = await git(['rev-parse', 'HEAD'], cwd);
   core.info(`Committed fix: ${shaResult.stdout.substring(0, 7)}`);
-  return shaResult.stdout;
+  return {
+    commitSha: shaResult.stdout,
+    filesCommitted: safeFiles,
+  };
 }
 
 export async function pushChanges(

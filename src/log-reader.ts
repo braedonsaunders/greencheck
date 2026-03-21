@@ -1,5 +1,7 @@
 import * as core from '@actions/core';
 import * as github from '@actions/github';
+import * as fs from 'fs';
+import * as path from 'path';
 import stripAnsi from 'strip-ansi';
 import { parseLog } from './parsers';
 import { CIWorkflowRun, LogParserResult } from './types';
@@ -146,16 +148,23 @@ export async function readAndParseFailures(
 
   if (!rawLog) {
     core.warning('No log content retrieved');
-    return { failures: [], rawLog: '', parserUsed: 'none' };
+    return { failures: [], rawLog: '', parserUsed: 'none', logPath: null };
   }
 
   const cleanLog = stripAnsi(rawLog);
+  const logPath = writeWorkflowLog(runId, cleanLog);
   core.info(`Downloaded ${cleanLog.length} bytes of logs, parsing...`);
+  if (logPath) {
+    core.info(`Saved workflow logs to ${logPath}`);
+  }
 
   const result = parseLog(cleanLog);
   core.info(`Found ${result.failures.length} failures using parsers: ${result.parserUsed}`);
 
-  return result;
+  return {
+    ...result,
+    logPath,
+  };
 }
 
 function decodeLogPayload(data: LogPayload): string {
@@ -183,6 +192,21 @@ async function loadAdmZip(): Promise<AdmZipConstructor | null> {
     const module = await import('adm-zip');
     return module.default as AdmZipConstructor;
   } catch {
+    return null;
+  }
+}
+
+function writeWorkflowLog(runId: number, content: string, workDir?: string): string | null {
+  try {
+    const baseDir = path.join(workDir || process.cwd(), '.greencheck', 'logs');
+    fs.mkdirSync(baseDir, { recursive: true });
+
+    const relativePath = path.join('.greencheck', 'logs', `workflow-run-${runId}.log`);
+    const fullPath = path.join(workDir || process.cwd(), relativePath);
+    fs.writeFileSync(fullPath, content, 'utf-8');
+    return relativePath;
+  } catch (error) {
+    core.warning(`Failed to persist workflow logs locally: ${error}`);
     return null;
   }
 }

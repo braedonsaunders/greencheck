@@ -34,6 +34,10 @@ export function loadCheckpoint(workDir?: string): RunState | null {
     const content = fs.readFileSync(filePath, 'utf-8');
     const state = JSON.parse(content) as RunState;
     state.latestFailures = state.latestFailures || [];
+    state.latestParserUsed = state.latestParserUsed || 'none';
+    state.latestLogPath = state.latestLogPath || null;
+    state.workflowName = state.workflowName || '';
+    state.workflowUrl = state.workflowUrl || '';
     core.info(`Loaded checkpoint: ${state.passes.length} passes, ${state.commits.length} commits`);
     return state;
   } catch (err) {
