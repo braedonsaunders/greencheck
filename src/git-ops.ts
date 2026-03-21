@@ -53,15 +53,14 @@ export async function pullLatest(branch: string, cwd?: string): Promise<void> {
 }
 
 export async function getChangedFiles(cwd?: string): Promise<string[]> {
-  const changed = await git(['status', '--porcelain'], cwd);
-  if (!changed.stdout) {
-    return [];
-  }
+  const tracked = await git(['diff', '--name-only', '--relative', 'HEAD'], cwd);
+  const staged = await git(['diff', '--cached', '--name-only', '--relative'], cwd);
+  const untracked = await git(['ls-files', '--others', '--exclude-standard'], cwd);
 
   return [...new Set(
-    changed.stdout
-      .split('\n')
-      .map((line) => line.slice(3).trim())
+    [tracked.stdout, staged.stdout, untracked.stdout]
+      .flatMap((output) => output.split('\n'))
+      .map((line) => line.trim())
       .filter(Boolean),
   )];
 }
@@ -87,6 +86,8 @@ export async function commitFix(
     await discardAllChanges(cwd);
     return { commitSha: null, filesCommitted: [] };
   }
+
+  core.info(`Changed files detected: ${safeFiles.join(', ')}`);
 
   const protectedFiles = changedFiles.filter(
     (file) => isProtectedFile(file, config.safety.neverTouchFiles),
