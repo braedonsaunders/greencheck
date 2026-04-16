@@ -5,6 +5,7 @@ import { waitForWorkflowCompletion } from './ci-trigger';
 import { discardAllChanges, getChangedFiles, getCurrentSha, pushChanges, revertCommit, commitFix } from './git-ops';
 import { readAndParseFailures } from './log-reader';
 import { saveCheckpoint } from './checkpoint';
+import { triageFailures } from './triage';
 import { AgentContext, FailureCluster, FailureRecord, FixAttempt, GreenCheckConfig, LogParserResult, RunState } from './types';
 import { normalizePath } from './glob';
 
@@ -46,7 +47,7 @@ export async function runFixLoop(
       core.warning('No workflow log content was retrieved; continuing anyway so the agent can inspect the repository directly');
     }
 
-    const cluster = buildAgentCluster(logResult);
+    const cluster = buildAgentCluster(logResult, config);
     const context = buildAgentContext(state, logResult);
     const attempt = await fixCluster(context, cluster, pass, config);
     state.passes.push(attempt);
@@ -262,13 +263,62 @@ async function revertRegressiveCommit(
   return true;
 }
 
-function buildAgentCluster(logResult: LogParserResult): FailureCluster {
-  void logResult;
+export function buildAgentCluster(
+  logResult: LogParserResult,
+  config: GreenCheckConfig,
+): FailureCluster {
+  if (logResult.failures.length === 0) {
+    return {
+      type: 'unknown',
+      files: [],
+      failures: [],
+      strategy: 'llm',
+    };
+  }
+
+  const prioritized = triageFailures(logResult.failures, config);
+  if (prioritized.length === 0) {
+    const fallbackFiles = [...new Set(logResult.failures.map((failure) => failure.file))]
+      .filter(Boolean)
+      .slice(0, config.safety.maxFilesPerFix);
+    const fallbackFailures = logResult.failures.filter((failure) => fallbackFiles.includes(failure.file));
+    const fallbackType = fallbackFailures[0]?.type || 'unknown';
+
+    return {
+      type: fallbackType,
+      files: fallbackFiles,
+      failures: fallbackFailures,
+      strategy: 'llm',
+    };
+  }
+
+  const [selected, ...remaining] = prioritized;
+  const files = [...selected.files];
+  const failures = [...selected.failures];
+  const seenFiles = new Set(files);
+
+  for (const cluster of remaining) {
+    if (cluster.type !== selected.type) {
+      break;
+    }
+
+    const additionalFiles = cluster.files.filter((file) => !seenFiles.has(file));
+    if (files.length + additionalFiles.length > config.safety.maxFilesPerFix) {
+      break;
+    }
+
+    for (const file of additionalFiles) {
+      seenFiles.add(file);
+      files.push(file);
+    }
+
+    failures.push(...cluster.failures);
+  }
+
   return {
-    type: 'unknown',
-    files: [],
-    failures: [],
-    strategy: 'llm',
+    ...selected,
+    files,
+    failures,
   };
 }
 

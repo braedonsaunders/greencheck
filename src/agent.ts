@@ -3,7 +3,6 @@ import * as exec from '@actions/exec';
 import { AgentContext, AgentInvocation, FailureCluster, GreenCheckConfig } from './types';
 
 function buildPrompt(context: AgentContext, cluster: FailureCluster): string {
-  void cluster;
   const logAccess = context.logPath
     ? `- Full workflow logs are saved locally at \`${context.logPath}\``
     : '- Full workflow logs could not be saved locally; rely on git history, workflow files, and repo tooling';
@@ -14,6 +13,7 @@ function buildPrompt(context: AgentContext, cluster: FailureCluster): string {
 ${logSummary}
 `
     : '';
+  const parsedFailureSection = buildParsedFailureSection(context, cluster);
 
   return `A GitHub Actions workflow failed for this repository. Take control immediately, investigate the failure, make the smallest reasonable fix, and verify it before you finish.
 
@@ -25,14 +25,17 @@ ${logSummary}
 - Commit SHA: ${context.headSha}
 ${logAccess}
 ${logSummarySection}
+${parsedFailureSection}
 ## Immediate workflow
 - Open the saved workflow log file first and use it as source of truth.
+- Start with the parsed failure hints and focus files below before expanding outward.
 - Re-run the exact failing commands you can infer from the CI logs, starting with the narrowest failing scope.
 - Make the smallest fix that addresses the concrete failures you find, then verify with repo-native commands before finishing.
 
 ## What you should do
 - Start from the failed CI context above.
 - Read the saved workflow log file yourself if it exists.
+- Treat the parsed hints as strong leads, not guesses: use them to find the failing code paths quickly.
 - Inspect the repository's workflow files, scripts, package configuration, and source code as needed.
 - Run the repository's own tests, linting, typechecking, or other narrow verification commands to confirm the fix.
 - If the failure is ambiguous, investigate until you have a defensible fix instead of guessing.
@@ -44,6 +47,41 @@ ${logSummarySection}
 - Do not add dependencies unless the failure genuinely requires it.
 - Avoid changing protected files like lockfiles or secrets unless absolutely necessary; greencheck may discard those edits before commit.
 - Before finishing, run the narrowest verification you can and leave the repo in a state that should pass CI.`;
+}
+
+function buildParsedFailureSection(context: AgentContext, cluster: FailureCluster): string {
+  if (cluster.failures.length === 0) {
+    return '';
+  }
+
+  const focusFiles = cluster.files.length > 0
+    ? cluster.files.map((file) => `- \`${file}\``).join('\n')
+    : '- No specific files were isolated; inspect the parsed failures and nearby code';
+  const parserLine = context.parserUsed && context.parserUsed !== 'none'
+    ? `- Parser(s): ${context.parserUsed}`
+    : '- Parser(s): none';
+
+  return `
+## Parsed hints from greencheck
+- Failure type: ${cluster.type}
+- Strategy: ${cluster.strategy}
+${parserLine}
+- Focus files:
+${focusFiles}
+- Concrete failures:
+${formatParsedFailures(cluster)}
+`;
+}
+
+function formatParsedFailures(cluster: FailureCluster): string {
+  return cluster.failures
+    .slice(0, 20)
+    .map((failure) => {
+      const location = failure.line ? `:${failure.line}${failure.column ? `:${failure.column}` : ''}` : '';
+      const rule = failure.rule ? ` (${failure.rule})` : '';
+      return `  - \`${failure.file}${location}\`${rule}: ${failure.message}`;
+    })
+    .join('\n');
 }
 
 async function commandExists(command: string): Promise<boolean> {

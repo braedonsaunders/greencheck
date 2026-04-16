@@ -1,9 +1,11 @@
 import * as core from '@actions/core';
 import * as github from '@actions/github';
+import { execFileSync } from 'child_process';
 import * as fs from 'fs';
 import * as path from 'path';
 import stripAnsi from 'strip-ansi';
-import { CIWorkflowRun, LogParserResult } from './types';
+import { parseLog } from './parsers';
+import { CIWorkflowRun, FailureRecord, LogParserResult } from './types';
 
 type Octokit = ReturnType<typeof github.getOctokit>;
 
@@ -153,15 +155,17 @@ export async function readAndParseFailures(
   const cleanLog = stripAnsi(rawLog);
   const normalizedLog = normalizeGithubActionsLog(cleanLog);
   const logPath = writeWorkflowLog(runId, normalizedLog);
+  const parsed = parseLog(normalizedLog);
+  const resolvedFailures = resolveFailurePaths(parsed.failures);
   core.info(`Downloaded ${normalizedLog.length} bytes of logs`);
   if (logPath) {
     core.info(`Saved workflow logs to ${logPath}`);
   }
 
   return {
-    failures: [],
+    failures: resolvedFailures,
     rawLog: normalizedLog,
-    parserUsed: 'disabled',
+    parserUsed: parsed.parserUsed,
     logPath,
   };
 }
@@ -218,4 +222,79 @@ function writeWorkflowLog(runId: number, content: string, workDir?: string): str
     core.warning(`Failed to persist workflow logs locally: ${error}`);
     return null;
   }
+}
+
+export function resolveFailurePaths(
+  failures: FailureRecord[],
+  workDir = process.cwd(),
+): FailureRecord[] {
+  if (failures.length === 0) {
+    return failures;
+  }
+
+  const repoFiles = listRepoFiles(workDir);
+  if (repoFiles.length === 0) {
+    return failures;
+  }
+
+  const resolutionCache = new Map<string, string>();
+  return failures.map((failure) => ({
+    ...failure,
+    file: resolveFailurePath(failure.file, repoFiles, resolutionCache, workDir),
+  }));
+}
+
+function resolveFailurePath(
+  file: string,
+  repoFiles: string[],
+  resolutionCache: Map<string, string>,
+  workDir: string,
+): string {
+  const normalizedInput = normalizeRepoPath(
+    path.isAbsolute(file) ? path.relative(workDir, file) : file,
+  );
+
+  if (!normalizedInput) {
+    return file;
+  }
+
+  const cached = resolutionCache.get(normalizedInput);
+  if (cached) {
+    return cached;
+  }
+
+  if (repoFiles.includes(normalizedInput)) {
+    resolutionCache.set(normalizedInput, normalizedInput);
+    return normalizedInput;
+  }
+
+  const suffixMatches = repoFiles.filter(
+    (repoFile) => repoFile === normalizedInput || repoFile.endsWith(`/${normalizedInput}`),
+  );
+  if (suffixMatches.length === 1) {
+    resolutionCache.set(normalizedInput, suffixMatches[0]);
+    return suffixMatches[0];
+  }
+
+  resolutionCache.set(normalizedInput, normalizedInput);
+  return normalizedInput;
+}
+
+function listRepoFiles(workDir: string): string[] {
+  try {
+    return execFileSync('git', ['ls-files'], {
+      cwd: workDir,
+      encoding: 'utf-8',
+      stdio: ['ignore', 'pipe', 'ignore'],
+    })
+      .split('\n')
+      .map(normalizeRepoPath)
+      .filter(Boolean);
+  } catch {
+    return [];
+  }
+}
+
+function normalizeRepoPath(value: string): string {
+  return value.replace(/\\/g, '/').replace(/^\.\//, '').trim();
 }

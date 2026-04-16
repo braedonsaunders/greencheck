@@ -43,4 +43,31 @@ describe('buildPrompt', () => {
     expect(prompt).toContain('Open the saved workflow log file first and use it as source of truth');
     expect(prompt).toContain('Read the saved workflow log file yourself if it exists');
   });
+
+  it('includes parsed failure hints when greencheck identified concrete files', () => {
+    const prompt = buildPrompt(
+      createContext({ parserUsed: 'pytest, ruff' }),
+      createCluster({
+        type: 'lint',
+        files: ['backend/api/routes.py', 'backend/services/runtime.py'],
+        failures: [
+          {
+            type: 'lint',
+            file: 'backend/api/routes.py',
+            line: 13,
+            column: 24,
+            message: 'unused import',
+            rule: 'F401',
+            rawLog: '',
+            confidence: 0.95,
+          },
+        ],
+      }),
+    );
+
+    expect(prompt).toContain('Parsed hints from greencheck');
+    expect(prompt).toContain('Parser(s): pytest, ruff');
+    expect(prompt).toContain('`backend/api/routes.py`');
+    expect(prompt).toContain('`backend/api/routes.py:13:24` (F401): unused import');
+  });
 });

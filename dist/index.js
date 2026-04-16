@@ -38664,7 +38664,6 @@ exports.buildPrompt = buildPrompt;
 const core = __importStar(__nccwpck_require__(7484));
 const exec = __importStar(__nccwpck_require__(5236));
 function buildPrompt(context, cluster) {
-    void cluster;
     const logAccess = context.logPath
         ? `- Full workflow logs are saved locally at \`${context.logPath}\``
         : '- Full workflow logs could not be saved locally; rely on git history, workflow files, and repo tooling';
@@ -38675,6 +38674,7 @@ function buildPrompt(context, cluster) {
 ${logSummary}
 `
         : '';
+    const parsedFailureSection = buildParsedFailureSection(context, cluster);
     return `A GitHub Actions workflow failed for this repository. Take control immediately, investigate the failure, make the smallest reasonable fix, and verify it before you finish.
 
 ## Workflow context
@@ -38685,14 +38685,17 @@ ${logSummary}
 - Commit SHA: ${context.headSha}
 ${logAccess}
 ${logSummarySection}
+${parsedFailureSection}
 ## Immediate workflow
 - Open the saved workflow log file first and use it as source of truth.
+- Start with the parsed failure hints and focus files below before expanding outward.
 - Re-run the exact failing commands you can infer from the CI logs, starting with the narrowest failing scope.
 - Make the smallest fix that addresses the concrete failures you find, then verify with repo-native commands before finishing.
 
 ## What you should do
 - Start from the failed CI context above.
 - Read the saved workflow log file yourself if it exists.
+- Treat the parsed hints as strong leads, not guesses: use them to find the failing code paths quickly.
 - Inspect the repository's workflow files, scripts, package configuration, and source code as needed.
 - Run the repository's own tests, linting, typechecking, or other narrow verification commands to confirm the fix.
 - If the failure is ambiguous, investigate until you have a defensible fix instead of guessing.
@@ -38704,6 +38707,37 @@ ${logSummarySection}
 - Do not add dependencies unless the failure genuinely requires it.
 - Avoid changing protected files like lockfiles or secrets unless absolutely necessary; greencheck may discard those edits before commit.
 - Before finishing, run the narrowest verification you can and leave the repo in a state that should pass CI.`;
+}
+function buildParsedFailureSection(context, cluster) {
+    if (cluster.failures.length === 0) {
+        return '';
+    }
+    const focusFiles = cluster.files.length > 0
+        ? cluster.files.map((file) => `- \`${file}\``).join('\n')
+        : '- No specific files were isolated; inspect the parsed failures and nearby code';
+    const parserLine = context.parserUsed && context.parserUsed !== 'none'
+        ? `- Parser(s): ${context.parserUsed}`
+        : '- Parser(s): none';
+    return `
+## Parsed hints from greencheck
+- Failure type: ${cluster.type}
+- Strategy: ${cluster.strategy}
+${parserLine}
+- Focus files:
+${focusFiles}
+- Concrete failures:
+${formatParsedFailures(cluster)}
+`;
+}
+function formatParsedFailures(cluster) {
+    return cluster.failures
+        .slice(0, 20)
+        .map((failure) => {
+        const location = failure.line ? `:${failure.line}${failure.column ? `:${failure.column}` : ''}` : '';
+        const rule = failure.rule ? ` (${failure.rule})` : '';
+        return `  - \`${failure.file}${location}\`${rule}: ${failure.message}`;
+    })
+        .join('\n');
 }
 async function commandExists(command) {
     const lookupCommand = process.platform === 'win32' ? 'where' : 'which';
@@ -40071,10 +40105,13 @@ exports.getFailedWorkflowRun = getFailedWorkflowRun;
 exports.downloadWorkflowLogs = downloadWorkflowLogs;
 exports.getFailedJobLogs = getFailedJobLogs;
 exports.readAndParseFailures = readAndParseFailures;
+exports.resolveFailurePaths = resolveFailurePaths;
 const core = __importStar(__nccwpck_require__(7484));
+const child_process_1 = __nccwpck_require__(5317);
 const fs = __importStar(__nccwpck_require__(9896));
 const path = __importStar(__nccwpck_require__(6928));
 const strip_ansi_1 = __importDefault(__nccwpck_require__(348));
+const parsers_1 = __nccwpck_require__(692);
 async function getFailedWorkflowRun(octokit, owner, repo, workflowRunId) {
     try {
         const { data: run } = await octokit.rest.actions.getWorkflowRun({
@@ -40177,14 +40214,16 @@ async function readAndParseFailures(octokit, owner, repo, runId) {
     const cleanLog = (0, strip_ansi_1.default)(rawLog);
     const normalizedLog = normalizeGithubActionsLog(cleanLog);
     const logPath = writeWorkflowLog(runId, normalizedLog);
+    const parsed = (0, parsers_1.parseLog)(normalizedLog);
+    const resolvedFailures = resolveFailurePaths(parsed.failures);
     core.info(`Downloaded ${normalizedLog.length} bytes of logs`);
     if (logPath) {
         core.info(`Saved workflow logs to ${logPath}`);
     }
     return {
-        failures: [],
+        failures: resolvedFailures,
         rawLog: normalizedLog,
-        parserUsed: 'disabled',
+        parserUsed: parsed.parserUsed,
         logPath,
     };
 }
@@ -40235,6 +40274,59 @@ function writeWorkflowLog(runId, content, workDir) {
         return null;
     }
 }
+function resolveFailurePaths(failures, workDir = process.cwd()) {
+    if (failures.length === 0) {
+        return failures;
+    }
+    const repoFiles = listRepoFiles(workDir);
+    if (repoFiles.length === 0) {
+        return failures;
+    }
+    const resolutionCache = new Map();
+    return failures.map((failure) => ({
+        ...failure,
+        file: resolveFailurePath(failure.file, repoFiles, resolutionCache, workDir),
+    }));
+}
+function resolveFailurePath(file, repoFiles, resolutionCache, workDir) {
+    const normalizedInput = normalizeRepoPath(path.isAbsolute(file) ? path.relative(workDir, file) : file);
+    if (!normalizedInput) {
+        return file;
+    }
+    const cached = resolutionCache.get(normalizedInput);
+    if (cached) {
+        return cached;
+    }
+    if (repoFiles.includes(normalizedInput)) {
+        resolutionCache.set(normalizedInput, normalizedInput);
+        return normalizedInput;
+    }
+    const suffixMatches = repoFiles.filter((repoFile) => repoFile === normalizedInput || repoFile.endsWith(`/${normalizedInput}`));
+    if (suffixMatches.length === 1) {
+        resolutionCache.set(normalizedInput, suffixMatches[0]);
+        return suffixMatches[0];
+    }
+    resolutionCache.set(normalizedInput, normalizedInput);
+    return normalizedInput;
+}
+function listRepoFiles(workDir) {
+    try {
+        return (0, child_process_1.execFileSync)('git', ['ls-files'], {
+            cwd: workDir,
+            encoding: 'utf-8',
+            stdio: ['ignore', 'pipe', 'ignore'],
+        })
+            .split('\n')
+            .map(normalizeRepoPath)
+            .filter(Boolean);
+    }
+    catch {
+        return [];
+    }
+}
+function normalizeRepoPath(value) {
+    return value.replace(/\\/g, '/').replace(/^\.\//, '').trim();
+}
 
 
 /***/ }),
@@ -40279,12 +40371,14 @@ var __importStar = (this && this.__importStar) || (function () {
 })();
 Object.defineProperty(exports, "__esModule", ({ value: true }));
 exports.runFixLoop = runFixLoop;
+exports.buildAgentCluster = buildAgentCluster;
 const core = __importStar(__nccwpck_require__(7484));
 const agent_1 = __nccwpck_require__(1598);
 const ci_trigger_1 = __nccwpck_require__(4742);
 const git_ops_1 = __nccwpck_require__(7482);
 const log_reader_1 = __nccwpck_require__(561);
 const checkpoint_1 = __nccwpck_require__(4213);
+const triage_1 = __nccwpck_require__(3235);
 const glob_1 = __nccwpck_require__(5601);
 async function runFixLoop(octokit, owner, repo, state, config) {
     const runStartedAt = new Date(state.startedAt).getTime();
@@ -40310,7 +40404,7 @@ async function runFixLoop(octokit, owner, repo, state, config) {
         if (!logResult.rawLog) {
             core.warning('No workflow log content was retrieved; continuing anyway so the agent can inspect the repository directly');
         }
-        const cluster = buildAgentCluster(logResult);
+        const cluster = buildAgentCluster(logResult, config);
         const context = buildAgentContext(state, logResult);
         const attempt = await fixCluster(context, cluster, pass, config);
         state.passes.push(attempt);
@@ -40461,13 +40555,51 @@ async function revertRegressiveCommit(octokit, owner, repo, state, commitSha, co
     (0, checkpoint_1.saveCheckpoint)(state);
     return true;
 }
-function buildAgentCluster(logResult) {
-    void logResult;
+function buildAgentCluster(logResult, config) {
+    if (logResult.failures.length === 0) {
+        return {
+            type: 'unknown',
+            files: [],
+            failures: [],
+            strategy: 'llm',
+        };
+    }
+    const prioritized = (0, triage_1.triageFailures)(logResult.failures, config);
+    if (prioritized.length === 0) {
+        const fallbackFiles = [...new Set(logResult.failures.map((failure) => failure.file))]
+            .filter(Boolean)
+            .slice(0, config.safety.maxFilesPerFix);
+        const fallbackFailures = logResult.failures.filter((failure) => fallbackFiles.includes(failure.file));
+        const fallbackType = fallbackFailures[0]?.type || 'unknown';
+        return {
+            type: fallbackType,
+            files: fallbackFiles,
+            failures: fallbackFailures,
+            strategy: 'llm',
+        };
+    }
+    const [selected, ...remaining] = prioritized;
+    const files = [...selected.files];
+    const failures = [...selected.failures];
+    const seenFiles = new Set(files);
+    for (const cluster of remaining) {
+        if (cluster.type !== selected.type) {
+            break;
+        }
+        const additionalFiles = cluster.files.filter((file) => !seenFiles.has(file));
+        if (files.length + additionalFiles.length > config.safety.maxFilesPerFix) {
+            break;
+        }
+        for (const file of additionalFiles) {
+            seenFiles.add(file);
+            files.push(file);
+        }
+        failures.push(...cluster.failures);
+    }
     return {
-        type: 'unknown',
-        files: [],
-        failures: [],
-        strategy: 'llm',
+        ...selected,
+        files,
+        failures,
     };
 }
 function buildAgentContext(state, logResult) {
@@ -40492,6 +40624,596 @@ function getFailureKey(failure) {
 }
 function getRemainingBudget(timeoutMs, runStartedAt) {
     return Math.max(15_000, timeoutMs - (Date.now() - runStartedAt));
+}
+
+
+/***/ }),
+
+/***/ 5939:
+/***/ ((__unused_webpack_module, exports) => {
+
+"use strict";
+
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.parseEslint = parseEslint;
+const ESLINT_PATTERN = /^(.+?):(\d+):(\d+):\s+(error|warning)\s+(.+?)(?:\s{2,}(\S+))?$/;
+const BIOME_PATTERN = /^(.+?):(\d+):(\d+)\s+(lint\/\S+)\s+\u2501+/;
+function parseEslint(log) {
+    const failures = [];
+    const lines = log.split('\n');
+    for (let index = 0; index < lines.length; index++) {
+        const line = lines[index].trim();
+        const eslintMatch = line.match(ESLINT_PATTERN);
+        if (eslintMatch) {
+            const [, file, lineNum, column, severity, message, rule] = eslintMatch;
+            if (severity === 'error') {
+                failures.push({
+                    type: 'lint',
+                    file: file.trim(),
+                    line: Number.parseInt(lineNum, 10),
+                    column: Number.parseInt(column, 10),
+                    message: message.trim(),
+                    rule: rule?.trim() || null,
+                    rawLog: line,
+                    confidence: rule ? 0.95 : 0.8,
+                });
+            }
+            continue;
+        }
+        const biomeMatch = line.match(BIOME_PATTERN);
+        if (!biomeMatch) {
+            continue;
+        }
+        const [, file, lineNum, column, rule] = biomeMatch;
+        const messageLine = index + 2 < lines.length ? lines[index + 2].trim() : '';
+        failures.push({
+            type: 'lint',
+            file: file.trim(),
+            line: Number.parseInt(lineNum, 10),
+            column: Number.parseInt(column, 10),
+            message: messageLine || `Biome error: ${rule}`,
+            rule: rule.trim(),
+            rawLog: lines.slice(index, Math.min(index + 5, lines.length)).join('\n'),
+            confidence: 0.9,
+        });
+    }
+    return failures;
+}
+
+
+/***/ }),
+
+/***/ 5444:
+/***/ ((__unused_webpack_module, exports) => {
+
+"use strict";
+
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.parseGo = parseGo;
+const FAIL_TEST_PATTERN = /^---\s+FAIL:\s+(\S+)\s+\([\d.]+s\)$/;
+const GO_ERROR_PATTERN = /^(\S+\.go):(\d+):\s+(.+)$/;
+const COMPILE_PATTERN = /^\.?\/?([\w/.-]+\.go):(\d+):(\d+):\s+(.+)$/;
+function parseGo(log) {
+    const failures = [];
+    const lines = log.split('\n');
+    for (let index = 0; index < lines.length; index++) {
+        const line = lines[index].trim();
+        const testMatch = line.match(FAIL_TEST_PATTERN);
+        if (testMatch) {
+            const testName = testMatch[1];
+            let file = '';
+            let lineNum = null;
+            let message = `Test failed: ${testName}`;
+            const rawLines = [line];
+            for (let scanIndex = index - 1; scanIndex >= Math.max(0, index - 20); scanIndex--) {
+                const previousLine = lines[scanIndex].trim();
+                rawLines.unshift(previousLine);
+                const errorMatch = previousLine.match(GO_ERROR_PATTERN);
+                if (errorMatch) {
+                    file = errorMatch[1];
+                    lineNum = Number.parseInt(errorMatch[2], 10);
+                    message = `${testName}: ${errorMatch[3].trim()}`;
+                    break;
+                }
+            }
+            if (file) {
+                failures.push({
+                    type: 'test-failure',
+                    file,
+                    line: lineNum,
+                    column: null,
+                    message,
+                    rule: null,
+                    rawLog: rawLines.join('\n'),
+                    confidence: 0.9,
+                });
+            }
+            continue;
+        }
+        const compileMatch = line.match(COMPILE_PATTERN);
+        if (compileMatch && !line.startsWith('---') && !line.startsWith('===')) {
+            const [, file, lineNum, column, message] = compileMatch;
+            failures.push({
+                type: 'build-error',
+                file,
+                line: Number.parseInt(lineNum, 10),
+                column: Number.parseInt(column, 10),
+                message: message.trim(),
+                rule: null,
+                rawLog: line,
+                confidence: 0.9,
+            });
+        }
+    }
+    return failures;
+}
+
+
+/***/ }),
+
+/***/ 692:
+/***/ (function(__unused_webpack_module, exports, __nccwpck_require__) {
+
+"use strict";
+
+var __importDefault = (this && this.__importDefault) || function (mod) {
+    return (mod && mod.__esModule) ? mod : { "default": mod };
+};
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.parseRust = exports.parseGo = exports.parseRuff = exports.parsePytest = exports.parseJest = exports.parseTypeScript = exports.parseEslint = void 0;
+exports.parseLog = parseLog;
+const strip_ansi_1 = __importDefault(__nccwpck_require__(348));
+const eslint_1 = __nccwpck_require__(5939);
+const typescript_1 = __nccwpck_require__(8713);
+const jest_1 = __nccwpck_require__(3416);
+const pytest_1 = __nccwpck_require__(4241);
+const go_1 = __nccwpck_require__(5444);
+const rust_1 = __nccwpck_require__(1504);
+const ruff_1 = __nccwpck_require__(9347);
+const parsers = [
+    {
+        name: 'eslint',
+        detect: (log) => /\d+:\d+\s+(error|warning)\s+.+\s{2,}\S+/.test(log) ||
+            /eslint/i.test(log) ||
+            /^.+:\d+:\d+\s+lint\/\S+\s+\u2501+/m.test(log) ||
+            /biome/i.test(log),
+        parse: eslint_1.parseEslint,
+    },
+    {
+        name: 'typescript',
+        detect: (log) => /error TS\d+/.test(log),
+        parse: typescript_1.parseTypeScript,
+    },
+    {
+        name: 'jest',
+        detect: (log) => /FAIL\s+.+\.(test|spec)\.\w+/.test(log) || /jest/i.test(log) || /vitest/i.test(log),
+        parse: jest_1.parseJest,
+    },
+    {
+        name: 'pytest',
+        detect: (log) => /FAILED\s+\S+::\S+/.test(log) || /pytest/i.test(log),
+        parse: pytest_1.parsePytest,
+    },
+    {
+        name: 'ruff',
+        detect: (log) => /ruff/i.test(log) || /^[A-Z]\d{3,4}\s+.+$/m.test(log),
+        parse: ruff_1.parseRuff,
+    },
+    {
+        name: 'go',
+        detect: (log) => /--- FAIL:/.test(log) ||
+            /^FAIL\s+\S+\s+[\d.]+s$/m.test(log) ||
+            /^\.?\/?[\w/.-]+\.go:\d+:\d+:\s+.+$/m.test(log),
+        parse: go_1.parseGo,
+    },
+    {
+        name: 'rust',
+        detect: (log) => /error\[E\d+\]/.test(log) || /cargo\s+(test|build|check)/.test(log),
+        parse: rust_1.parseRust,
+    },
+];
+function parseLog(rawLog) {
+    const allFailures = [];
+    const parsersUsed = [];
+    const cleanLog = (0, strip_ansi_1.default)(rawLog);
+    for (const parser of parsers) {
+        if (parser.detect(cleanLog)) {
+            const failures = parser.parse(cleanLog);
+            if (failures.length > 0) {
+                allFailures.push(...failures);
+                parsersUsed.push(parser.name);
+            }
+        }
+    }
+    // Deduplicate by file+line+message
+    const seen = new Set();
+    const deduplicated = allFailures.filter((f) => {
+        const key = `${f.file}:${f.line}:${f.message}`;
+        if (seen.has(key))
+            return false;
+        seen.add(key);
+        return true;
+    });
+    return {
+        failures: deduplicated,
+        rawLog: cleanLog,
+        parserUsed: parsersUsed.join(', ') || 'none',
+        logPath: null,
+    };
+}
+var eslint_2 = __nccwpck_require__(5939);
+Object.defineProperty(exports, "parseEslint", ({ enumerable: true, get: function () { return eslint_2.parseEslint; } }));
+var typescript_2 = __nccwpck_require__(8713);
+Object.defineProperty(exports, "parseTypeScript", ({ enumerable: true, get: function () { return typescript_2.parseTypeScript; } }));
+var jest_2 = __nccwpck_require__(3416);
+Object.defineProperty(exports, "parseJest", ({ enumerable: true, get: function () { return jest_2.parseJest; } }));
+var pytest_2 = __nccwpck_require__(4241);
+Object.defineProperty(exports, "parsePytest", ({ enumerable: true, get: function () { return pytest_2.parsePytest; } }));
+var ruff_2 = __nccwpck_require__(9347);
+Object.defineProperty(exports, "parseRuff", ({ enumerable: true, get: function () { return ruff_2.parseRuff; } }));
+var go_2 = __nccwpck_require__(5444);
+Object.defineProperty(exports, "parseGo", ({ enumerable: true, get: function () { return go_2.parseGo; } }));
+var rust_2 = __nccwpck_require__(1504);
+Object.defineProperty(exports, "parseRust", ({ enumerable: true, get: function () { return rust_2.parseRust; } }));
+
+
+/***/ }),
+
+/***/ 3416:
+/***/ ((__unused_webpack_module, exports) => {
+
+"use strict";
+
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.parseJest = parseJest;
+const FAIL_SUITE_PATTERN = /^\s*FAIL\s+(.+\.(?:test|spec)\.\w+)/;
+const TEST_NAME_PATTERN = /^\s*\u25cf\s+(.+)$/;
+const EXPECTED_PATTERN = /^\s*Expected:\s+(.+)$/;
+const RECEIVED_PATTERN = /^\s*Received:\s+(.+)$/;
+const STACK_PATTERN = /at\s+.+\((.+?):(\d+):(\d+)\)/;
+const SNAPSHOT_PATTERN = /^\s*\u203a\s+(\d+)\s+snapshot(?:s)?\s+failed/;
+function parseJest(log) {
+    const failures = [];
+    const lines = log.split('\n');
+    let currentSuite = null;
+    for (let index = 0; index < lines.length; index++) {
+        const line = lines[index];
+        const suiteMatch = line.match(FAIL_SUITE_PATTERN);
+        if (suiteMatch) {
+            currentSuite = suiteMatch[1].trim();
+            continue;
+        }
+        const testMatch = line.match(TEST_NAME_PATTERN);
+        if (testMatch && currentSuite) {
+            const testName = testMatch[1].trim();
+            let message = `Test failed: ${testName}`;
+            let file = currentSuite;
+            let lineNum = null;
+            let column = null;
+            const rawLines = [line];
+            let expected = null;
+            let received = null;
+            for (let scanIndex = index + 1; scanIndex < lines.length && scanIndex < index + 30; scanIndex++) {
+                const nextLine = lines[scanIndex];
+                rawLines.push(nextLine);
+                const expectedMatch = nextLine.match(EXPECTED_PATTERN);
+                if (expectedMatch) {
+                    expected = expectedMatch[1].trim();
+                }
+                const receivedMatch = nextLine.match(RECEIVED_PATTERN);
+                if (receivedMatch) {
+                    received = receivedMatch[1].trim();
+                }
+                const stackMatch = nextLine.match(STACK_PATTERN);
+                if (stackMatch && !lineNum) {
+                    file = stackMatch[1].trim();
+                    lineNum = Number.parseInt(stackMatch[2], 10);
+                    column = Number.parseInt(stackMatch[3], 10);
+                }
+                if (scanIndex > index + 1 &&
+                    (nextLine.match(TEST_NAME_PATTERN) || nextLine.match(FAIL_SUITE_PATTERN))) {
+                    break;
+                }
+            }
+            if (expected && received) {
+                message = `${testName}: Expected ${expected}, Received ${received}`;
+            }
+            failures.push({
+                type: 'test-failure',
+                file,
+                line: lineNum,
+                column,
+                message,
+                rule: null,
+                rawLog: rawLines.join('\n'),
+                confidence: lineNum ? 0.9 : 0.7,
+            });
+        }
+        const snapshotMatch = line.match(SNAPSHOT_PATTERN);
+        if (snapshotMatch && currentSuite) {
+            failures.push({
+                type: 'test-failure',
+                file: currentSuite,
+                line: null,
+                column: null,
+                message: `${snapshotMatch[1]} snapshot(s) failed - run the test runner with --update`,
+                rule: 'snapshot',
+                rawLog: line,
+                confidence: 0.95,
+            });
+        }
+    }
+    return failures;
+}
+
+
+/***/ }),
+
+/***/ 4241:
+/***/ ((__unused_webpack_module, exports) => {
+
+"use strict";
+
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.parsePytest = parsePytest;
+// FAILED test_file.py::TestClass::test_name - AssertionError: message
+const FAILED_PATTERN = /^FAILED\s+(.+?)::(.+?)(?:\s+-\s+(.+))?$/;
+// E       AssertionError: ...
+const ASSERTION_PATTERN = /^E\s+(.+)$/;
+// file.py:42: in function_name
+const LOCATION_PATTERN = /^(.+?):(\d+):\s+in\s+/;
+// short test summary info section
+const SUMMARY_START = /^=+\s+short test summary info\s+=+$/;
+// error collection
+const ERROR_PATTERN = /^ERROR\s+(.+?)(?:\s+-\s+(.+))?$/;
+function parsePytest(log) {
+    const failures = [];
+    const lines = log.split('\n');
+    let inSummary = false;
+    for (let i = 0; i < lines.length; i++) {
+        const line = lines[i].trim();
+        if (SUMMARY_START.test(line)) {
+            inSummary = true;
+            continue;
+        }
+        if (inSummary) {
+            const failMatch = line.match(FAILED_PATTERN);
+            if (failMatch) {
+                const [, filePath, testName, errorMsg] = failMatch;
+                const file = filePath.split('::')[0];
+                // Scan backwards for location and assertion details
+                let detailedMsg = errorMsg || `Test failed: ${testName}`;
+                let lineNum = null;
+                const rawLines = [line];
+                for (let j = i - 1; j >= Math.max(0, i - 50); j--) {
+                    const prevLine = lines[j].trim();
+                    const locMatch = prevLine.match(LOCATION_PATTERN);
+                    if (locMatch && locMatch[1].includes(file)) {
+                        lineNum = parseInt(locMatch[2], 10);
+                        break;
+                    }
+                    const assertMatch = prevLine.match(ASSERTION_PATTERN);
+                    if (assertMatch && detailedMsg === `Test failed: ${testName}`) {
+                        detailedMsg = assertMatch[1].trim();
+                    }
+                }
+                failures.push({
+                    type: 'test-failure',
+                    file,
+                    line: lineNum,
+                    column: null,
+                    message: detailedMsg,
+                    rule: null,
+                    rawLog: rawLines.join('\n'),
+                    confidence: lineNum ? 0.85 : 0.7,
+                });
+            }
+            const errorMatch = line.match(ERROR_PATTERN);
+            if (errorMatch) {
+                failures.push({
+                    type: 'test-failure',
+                    file: errorMatch[1].split('::')[0],
+                    line: null,
+                    column: null,
+                    message: errorMatch[2] || `Collection error: ${errorMatch[1]}`,
+                    rule: null,
+                    rawLog: line,
+                    confidence: 0.7,
+                });
+            }
+        }
+    }
+    return failures;
+}
+
+
+/***/ }),
+
+/***/ 9347:
+/***/ ((__unused_webpack_module, exports) => {
+
+"use strict";
+
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.parseRuff = parseRuff;
+const RUFF_DIAGNOSTIC_PATTERN = /^([A-Z]\d{3,4})\s+(.+)$/;
+const LOCATION_PATTERN = /^\s*-->\s+(.+?):(\d+):(\d+)$/;
+function parseRuff(log) {
+    const failures = [];
+    const lines = log.split('\n');
+    for (let index = 0; index < lines.length; index++) {
+        const line = lines[index].trim();
+        const diagnosticMatch = line.match(RUFF_DIAGNOSTIC_PATTERN);
+        if (!diagnosticMatch) {
+            continue;
+        }
+        const [, rule, message] = diagnosticMatch;
+        let file = '';
+        let lineNum = null;
+        let column = null;
+        const rawLines = [line];
+        for (let scanIndex = index + 1; scanIndex < Math.min(index + 8, lines.length); scanIndex++) {
+            const nextLine = lines[scanIndex];
+            rawLines.push(nextLine);
+            const locationMatch = nextLine.match(LOCATION_PATTERN);
+            if (locationMatch) {
+                file = locationMatch[1].trim();
+                lineNum = Number.parseInt(locationMatch[2], 10);
+                column = Number.parseInt(locationMatch[3], 10);
+                break;
+            }
+        }
+        if (!file) {
+            continue;
+        }
+        failures.push({
+            type: 'lint',
+            file,
+            line: lineNum,
+            column,
+            message: message.trim(),
+            rule,
+            rawLog: rawLines.join('\n'),
+            confidence: 0.95,
+        });
+    }
+    return failures;
+}
+
+
+/***/ }),
+
+/***/ 1504:
+/***/ ((__unused_webpack_module, exports) => {
+
+"use strict";
+
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.parseRust = parseRust;
+const ERROR_CODE_PATTERN = /^error\[(E\d+)\]:\s+(.+)$/;
+const ERROR_PLAIN_PATTERN = /^error:\s+(.+)$/;
+const LOCATION_PATTERN = /^\s*-->\s+(.+?):(\d+):(\d+)$/;
+const PANIC_PATTERN = /^thread\s+'(.+?)'\s+panicked\s+at\s+'(.+?)',\s+(.+?):(\d+):(\d+)$/;
+function parseRust(log) {
+    const failures = [];
+    const lines = log.split('\n');
+    for (let index = 0; index < lines.length; index++) {
+        const line = lines[index].trim();
+        const codeMatch = line.match(ERROR_CODE_PATTERN);
+        if (codeMatch) {
+            const [, code, message] = codeMatch;
+            let file = '';
+            let lineNum = null;
+            let column = null;
+            const rawLines = [line];
+            for (let scanIndex = index + 1; scanIndex < Math.min(index + 10, lines.length); scanIndex++) {
+                const nextLine = lines[scanIndex].trim();
+                rawLines.push(nextLine);
+                const locationMatch = nextLine.match(LOCATION_PATTERN);
+                if (locationMatch) {
+                    file = locationMatch[1];
+                    lineNum = Number.parseInt(locationMatch[2], 10);
+                    column = Number.parseInt(locationMatch[3], 10);
+                    break;
+                }
+            }
+            if (file) {
+                failures.push({
+                    type: 'build-error',
+                    file,
+                    line: lineNum,
+                    column,
+                    message: `${code}: ${message}`,
+                    rule: code,
+                    rawLog: rawLines.join('\n'),
+                    confidence: 0.95,
+                });
+            }
+            continue;
+        }
+        const panicMatch = line.match(PANIC_PATTERN);
+        if (panicMatch) {
+            const [, testName, message, file, lineNum, column] = panicMatch;
+            failures.push({
+                type: 'test-failure',
+                file,
+                line: Number.parseInt(lineNum, 10),
+                column: Number.parseInt(column, 10),
+                message: `${testName}: ${message}`,
+                rule: null,
+                rawLog: line,
+                confidence: 0.9,
+            });
+            continue;
+        }
+        const plainMatch = line.match(ERROR_PLAIN_PATTERN);
+        if (!plainMatch || line.includes('aborting due to')) {
+            continue;
+        }
+        let file = '';
+        let lineNum = null;
+        let column = null;
+        for (let scanIndex = index + 1; scanIndex < Math.min(index + 10, lines.length); scanIndex++) {
+            const nextLine = lines[scanIndex].trim();
+            const locationMatch = nextLine.match(LOCATION_PATTERN);
+            if (locationMatch) {
+                file = locationMatch[1];
+                lineNum = Number.parseInt(locationMatch[2], 10);
+                column = Number.parseInt(locationMatch[3], 10);
+                break;
+            }
+        }
+        if (file) {
+            failures.push({
+                type: 'build-error',
+                file,
+                line: lineNum,
+                column,
+                message: plainMatch[1],
+                rule: null,
+                rawLog: line,
+                confidence: 0.8,
+            });
+        }
+    }
+    return failures;
+}
+
+
+/***/ }),
+
+/***/ 8713:
+/***/ ((__unused_webpack_module, exports) => {
+
+"use strict";
+
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.parseTypeScript = parseTypeScript;
+// Matches: src/file.ts(10,5): error TS2345: message
+const TSC_PATTERN = /^(.+?)\((\d+),(\d+)\):\s+error\s+(TS\d+):\s+(.+)$/;
+// Alternative format: src/file.ts:10:5 - error TS2345: message
+const TSC_ALT_PATTERN = /^(.+?):(\d+):(\d+)\s+-\s+error\s+(TS\d+):\s+(.+)$/;
+function parseTypeScript(log) {
+    const failures = [];
+    const lines = log.split('\n');
+    for (const line of lines) {
+        const trimmed = line.trim();
+        const match = trimmed.match(TSC_PATTERN) || trimmed.match(TSC_ALT_PATTERN);
+        if (match) {
+            const [, file, lineNum, col, code, message] = match;
+            failures.push({
+                type: 'type-error',
+                file: file.trim(),
+                line: parseInt(lineNum, 10),
+                column: parseInt(col, 10),
+                message: `${code}: ${message.trim()}`,
+                rule: code,
+                rawLog: trimmed,
+                confidence: 0.95,
+            });
+        }
+    }
+    return failures;
 }
 
 
@@ -40742,6 +41464,194 @@ async function report(octokit, owner, repo, state, config) {
     core.setOutput('failures-fixed', state.passes.filter((pass) => pass.result === 'fixed').reduce((sum, pass) => sum + pass.cluster.failures.length, 0));
     core.setOutput('commits', state.commits.join(','));
     core.setOutput('cost', formatCost(state.totalCostCents));
+}
+
+
+/***/ }),
+
+/***/ 3235:
+/***/ (function(__unused_webpack_module, exports, __nccwpck_require__) {
+
+"use strict";
+
+var __createBinding = (this && this.__createBinding) || (Object.create ? (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    var desc = Object.getOwnPropertyDescriptor(m, k);
+    if (!desc || ("get" in desc ? !m.__esModule : desc.writable || desc.configurable)) {
+      desc = { enumerable: true, get: function() { return m[k]; } };
+    }
+    Object.defineProperty(o, k2, desc);
+}) : (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    o[k2] = m[k];
+}));
+var __setModuleDefault = (this && this.__setModuleDefault) || (Object.create ? (function(o, v) {
+    Object.defineProperty(o, "default", { enumerable: true, value: v });
+}) : function(o, v) {
+    o["default"] = v;
+});
+var __importStar = (this && this.__importStar) || (function () {
+    var ownKeys = function(o) {
+        ownKeys = Object.getOwnPropertyNames || function (o) {
+            var ar = [];
+            for (var k in o) if (Object.prototype.hasOwnProperty.call(o, k)) ar[ar.length] = k;
+            return ar;
+        };
+        return ownKeys(o);
+    };
+    return function (mod) {
+        if (mod && mod.__esModule) return mod;
+        var result = {};
+        if (mod != null) for (var k = ownKeys(mod), i = 0; i < k.length; i++) if (k[i] !== "default") __createBinding(result, mod, k[i]);
+        __setModuleDefault(result, mod);
+        return result;
+    };
+})();
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.clusterFailures = clusterFailures;
+exports.prioritizeClusters = prioritizeClusters;
+exports.filterByConfig = filterByConfig;
+exports.triageFailures = triageFailures;
+const core = __importStar(__nccwpck_require__(7484));
+const glob_1 = __nccwpck_require__(5601);
+const FIXABILITY_ORDER = [
+    'lint',
+    'type-error',
+    'test-failure',
+    'build-error',
+    'runtime-error',
+    'unknown',
+];
+function getStrategy(type, failures) {
+    switch (type) {
+        case 'lint': {
+            const hasAutoFixable = failures.some((failure) => failure.rule !== null &&
+                [
+                    'no-unused-vars',
+                    'semi',
+                    'quotes',
+                    'indent',
+                    'comma-dangle',
+                    'eol-last',
+                    'no-trailing-spaces',
+                    'no-multiple-empty-lines',
+                ].includes(failure.rule));
+            return hasAutoFixable ? 'deterministic+llm' : 'llm';
+        }
+        case 'test-failure':
+            return failures.some((failure) => failure.rule === 'snapshot') ? 'deterministic+llm' : 'llm';
+        default:
+            return 'llm';
+    }
+}
+function clusterFailures(failures) {
+    const byType = new Map();
+    for (const failure of failures) {
+        const existing = byType.get(failure.type) || [];
+        existing.push({
+            ...failure,
+            file: (0, glob_1.normalizePath)(failure.file),
+        });
+        byType.set(failure.type, existing);
+    }
+    const clusters = [];
+    for (const [type, typeFailures] of byType) {
+        const byFile = new Map();
+        for (const failure of typeFailures) {
+            const existing = byFile.get(failure.file) || [];
+            existing.push(failure);
+            byFile.set(failure.file, existing);
+        }
+        const fileGroups = [];
+        const visited = new Set();
+        for (const [file, fileFailures] of byFile) {
+            if (visited.has(file)) {
+                continue;
+            }
+            visited.add(file);
+            const group = new Map();
+            group.set(file, fileFailures);
+            const directory = getDirectory(file);
+            for (const [otherFile, otherFailures] of byFile) {
+                if (visited.has(otherFile)) {
+                    continue;
+                }
+                if (directory === getDirectory(otherFile)) {
+                    visited.add(otherFile);
+                    group.set(otherFile, otherFailures);
+                }
+            }
+            fileGroups.push(group);
+        }
+        for (const group of fileGroups) {
+            const groupedFailures = Array.from(group.values()).flat();
+            const files = Array.from(group.keys());
+            clusters.push({
+                type,
+                files,
+                failures: groupedFailures,
+                strategy: getStrategy(type, groupedFailures),
+            });
+        }
+    }
+    return clusters;
+}
+function prioritizeClusters(clusters) {
+    return [...clusters].sort((a, b) => {
+        const aIdx = FIXABILITY_ORDER.indexOf(a.type);
+        const bIdx = FIXABILITY_ORDER.indexOf(b.type);
+        if (aIdx !== bIdx) {
+            return aIdx - bIdx;
+        }
+        if (a.strategy !== b.strategy) {
+            if (a.strategy === 'deterministic')
+                return -1;
+            if (b.strategy === 'deterministic')
+                return 1;
+            if (a.strategy === 'deterministic+llm')
+                return -1;
+            if (b.strategy === 'deterministic+llm')
+                return 1;
+        }
+        return averageConfidence(b.failures) - averageConfidence(a.failures);
+    });
+}
+function filterByConfig(clusters, config) {
+    const allowedTypes = config.fixTypes === 'all' ? FIXABILITY_ORDER : config.fixTypes;
+    return clusters
+        .filter((cluster) => allowedTypes.includes(cluster.type))
+        .map((cluster) => ({
+        ...cluster,
+        files: cluster.files.filter((file) => !isProtectedFile(file, config.safety.neverTouchFiles)),
+        failures: cluster.failures.filter((failure) => !isProtectedFile(failure.file, config.safety.neverTouchFiles)),
+    }))
+        .filter((cluster) => cluster.failures.length > 0 && cluster.files.length <= config.safety.maxFilesPerFix);
+}
+function triageFailures(failures, config) {
+    core.info(`Triaging ${failures.length} failures...`);
+    const clusters = clusterFailures(failures);
+    core.info(`Grouped into ${clusters.length} clusters`);
+    const filtered = filterByConfig(clusters, config);
+    core.info(`${filtered.length} clusters after filtering by config`);
+    const prioritized = prioritizeClusters(filtered);
+    for (const cluster of prioritized) {
+        core.info(`  [${cluster.type}] ${cluster.files.join(', ')} - ${cluster.failures.length} failures - strategy: ${cluster.strategy}`);
+    }
+    return prioritized;
+}
+function isProtectedFile(file, patterns) {
+    return patterns.some((pattern) => (0, glob_1.matchesGlob)(file, pattern));
+}
+function getDirectory(file) {
+    const normalized = (0, glob_1.normalizePath)(file);
+    const lastSlash = normalized.lastIndexOf('/');
+    return lastSlash === -1 ? '' : normalized.slice(0, lastSlash);
+}
+function averageConfidence(failures) {
+    if (failures.length === 0) {
+        return 0;
+    }
+    return failures.reduce((sum, failure) => sum + failure.confidence, 0) / failures.length;
 }
 
 
