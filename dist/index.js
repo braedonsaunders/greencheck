@@ -40380,6 +40380,8 @@ const log_reader_1 = __nccwpck_require__(561);
 const checkpoint_1 = __nccwpck_require__(4213);
 const triage_1 = __nccwpck_require__(3235);
 const glob_1 = __nccwpck_require__(5601);
+const TEST_FAILURE_MAX_FILES_PER_CLUSTER = 3;
+const TEST_FAILURE_MAX_FAILURES_PER_CLUSTER = 5;
 async function runFixLoop(octokit, owner, repo, state, config) {
     const runStartedAt = new Date(state.startedAt).getTime();
     for (let pass = state.passes.length + 1; pass <= config.maxPasses; pass++) {
@@ -40476,10 +40478,14 @@ async function fixCluster(context, cluster, pass, config) {
     try {
         const invocation = await (0, agent_1.invokeAgent)(context, cluster, config, process.cwd());
         if (invocation.exitCode !== 0) {
+            logAgentOutput(invocation);
             core.warning(`Agent exited with ${invocation.exitCode}; checking whether it still produced usable changes`);
         }
         const changedFiles = await (0, git_ops_1.getChangedFiles)();
         if (changedFiles.length === 0) {
+            if (invocation.exitCode === 0) {
+                logAgentOutput(invocation);
+            }
             core.warning('Agent produced no changes');
             return {
                 pass,
@@ -40582,12 +40588,17 @@ function buildAgentCluster(logResult, config) {
     const files = [...selected.files];
     const failures = [...selected.failures];
     const seenFiles = new Set(files);
+    const fileLimit = getClusterFileLimit(selected, config);
+    const failureLimit = getClusterFailureLimit(selected);
     for (const cluster of remaining) {
         if (cluster.type !== selected.type) {
             break;
         }
         const additionalFiles = cluster.files.filter((file) => !seenFiles.has(file));
-        if (files.length + additionalFiles.length > config.safety.maxFilesPerFix) {
+        if (files.length + additionalFiles.length > fileLimit) {
+            break;
+        }
+        if (failures.length + cluster.failures.length > failureLimit) {
             break;
         }
         for (const file of additionalFiles) {
@@ -40614,6 +40625,42 @@ function buildAgentContext(state, logResult) {
         rawLog: logResult.rawLog,
         parsedFailures: logResult.failures,
     };
+}
+function getClusterFileLimit(cluster, config) {
+    if (cluster.type === 'test-failure') {
+        return Math.min(config.safety.maxFilesPerFix, TEST_FAILURE_MAX_FILES_PER_CLUSTER);
+    }
+    return config.safety.maxFilesPerFix;
+}
+function getClusterFailureLimit(cluster) {
+    if (cluster.type === 'test-failure') {
+        return TEST_FAILURE_MAX_FAILURES_PER_CLUSTER;
+    }
+    return Number.POSITIVE_INFINITY;
+}
+function logAgentOutput(invocation) {
+    const stdoutExcerpt = buildAgentOutputExcerpt(invocation.stdout);
+    const stderrExcerpt = buildAgentOutputExcerpt(invocation.stderr);
+    if (stdoutExcerpt) {
+        core.info(`Agent stdout excerpt:\n${stdoutExcerpt}`);
+    }
+    if (stderrExcerpt) {
+        core.warning(`Agent stderr excerpt:\n${stderrExcerpt}`);
+    }
+}
+function buildAgentOutputExcerpt(output) {
+    const lines = output
+        .split('\n')
+        .map((line) => line.trimEnd())
+        .filter((line) => line.trim().length > 0);
+    if (lines.length === 0) {
+        return '';
+    }
+    const excerpt = lines.slice(-40).join('\n');
+    if (excerpt.length <= 4_000) {
+        return excerpt;
+    }
+    return excerpt.slice(excerpt.length - 4_000);
 }
 function getNewFailures(previous, next) {
     const previousKeys = new Set(previous.map(getFailureKey));
@@ -41545,47 +41592,26 @@ function getStrategy(type, failures) {
     }
 }
 function clusterFailures(failures) {
-    const byType = new Map();
+    const grouped = new Map();
     for (const failure of failures) {
-        const existing = byType.get(failure.type) || [];
-        existing.push({
+        const normalizedFailure = {
             ...failure,
             file: (0, glob_1.normalizePath)(failure.file),
-        });
-        byType.set(failure.type, existing);
+        };
+        const typeGroups = grouped.get(normalizedFailure.type) || new Map();
+        const clusterKey = getClusterKey(normalizedFailure.type, normalizedFailure.file);
+        const fileGroups = typeGroups.get(clusterKey) || new Map();
+        const fileFailures = fileGroups.get(normalizedFailure.file) || [];
+        fileFailures.push(normalizedFailure);
+        fileGroups.set(normalizedFailure.file, fileFailures);
+        typeGroups.set(clusterKey, fileGroups);
+        grouped.set(normalizedFailure.type, typeGroups);
     }
     const clusters = [];
-    for (const [type, typeFailures] of byType) {
-        const byFile = new Map();
-        for (const failure of typeFailures) {
-            const existing = byFile.get(failure.file) || [];
-            existing.push(failure);
-            byFile.set(failure.file, existing);
-        }
-        const fileGroups = [];
-        const visited = new Set();
-        for (const [file, fileFailures] of byFile) {
-            if (visited.has(file)) {
-                continue;
-            }
-            visited.add(file);
-            const group = new Map();
-            group.set(file, fileFailures);
-            const directory = getDirectory(file);
-            for (const [otherFile, otherFailures] of byFile) {
-                if (visited.has(otherFile)) {
-                    continue;
-                }
-                if (directory === getDirectory(otherFile)) {
-                    visited.add(otherFile);
-                    group.set(otherFile, otherFailures);
-                }
-            }
-            fileGroups.push(group);
-        }
-        for (const group of fileGroups) {
-            const groupedFailures = Array.from(group.values()).flat();
-            const files = Array.from(group.keys());
+    for (const [type, typeGroups] of grouped) {
+        for (const fileGroups of typeGroups.values()) {
+            const groupedFailures = Array.from(fileGroups.values()).flat();
+            const files = Array.from(fileGroups.keys());
             clusters.push({
                 type,
                 files,
@@ -41612,6 +41638,9 @@ function prioritizeClusters(clusters) {
                 return -1;
             if (b.strategy === 'deterministic+llm')
                 return 1;
+        }
+        if (a.failures.length !== b.failures.length) {
+            return b.failures.length - a.failures.length;
         }
         return averageConfidence(b.failures) - averageConfidence(a.failures);
     });
@@ -41646,6 +41675,12 @@ function getDirectory(file) {
     const normalized = (0, glob_1.normalizePath)(file);
     const lastSlash = normalized.lastIndexOf('/');
     return lastSlash === -1 ? '' : normalized.slice(0, lastSlash);
+}
+function getClusterKey(type, file) {
+    if (type === 'test-failure') {
+        return (0, glob_1.normalizePath)(file);
+    }
+    return getDirectory(file);
 }
 function averageConfidence(failures) {
     if (failures.length === 0) {

@@ -6,10 +6,13 @@ import { discardAllChanges, getChangedFiles, getCurrentSha, pushChanges, revertC
 import { readAndParseFailures } from './log-reader';
 import { saveCheckpoint } from './checkpoint';
 import { triageFailures } from './triage';
-import { AgentContext, FailureCluster, FailureRecord, FixAttempt, GreenCheckConfig, LogParserResult, RunState } from './types';
+import { AgentContext, AgentInvocation, FailureCluster, FailureRecord, FixAttempt, GreenCheckConfig, LogParserResult, RunState } from './types';
 import { normalizePath } from './glob';
 
 type Octokit = ReturnType<typeof github.getOctokit>;
+
+const TEST_FAILURE_MAX_FILES_PER_CLUSTER = 3;
+const TEST_FAILURE_MAX_FAILURES_PER_CLUSTER = 5;
 
 export async function runFixLoop(
   octokit: Octokit,
@@ -156,11 +159,15 @@ async function fixCluster(
   try {
     const invocation = await invokeAgent(context, cluster, config, process.cwd());
     if (invocation.exitCode !== 0) {
+      logAgentOutput(invocation);
       core.warning(`Agent exited with ${invocation.exitCode}; checking whether it still produced usable changes`);
     }
 
     const changedFiles = await getChangedFiles();
     if (changedFiles.length === 0) {
+      if (invocation.exitCode === 0) {
+        logAgentOutput(invocation);
+      }
       core.warning('Agent produced no changes');
       return {
         pass,
@@ -296,6 +303,8 @@ export function buildAgentCluster(
   const files = [...selected.files];
   const failures = [...selected.failures];
   const seenFiles = new Set(files);
+  const fileLimit = getClusterFileLimit(selected, config);
+  const failureLimit = getClusterFailureLimit(selected);
 
   for (const cluster of remaining) {
     if (cluster.type !== selected.type) {
@@ -303,7 +312,11 @@ export function buildAgentCluster(
     }
 
     const additionalFiles = cluster.files.filter((file) => !seenFiles.has(file));
-    if (files.length + additionalFiles.length > config.safety.maxFilesPerFix) {
+    if (files.length + additionalFiles.length > fileLimit) {
+      break;
+    }
+
+    if (failures.length + cluster.failures.length > failureLimit) {
       break;
     }
 
@@ -334,6 +347,53 @@ function buildAgentContext(state: RunState, logResult: LogParserResult): AgentCo
     rawLog: logResult.rawLog,
     parsedFailures: logResult.failures,
   };
+}
+
+function getClusterFileLimit(cluster: FailureCluster, config: GreenCheckConfig): number {
+  if (cluster.type === 'test-failure') {
+    return Math.min(config.safety.maxFilesPerFix, TEST_FAILURE_MAX_FILES_PER_CLUSTER);
+  }
+
+  return config.safety.maxFilesPerFix;
+}
+
+function getClusterFailureLimit(cluster: FailureCluster): number {
+  if (cluster.type === 'test-failure') {
+    return TEST_FAILURE_MAX_FAILURES_PER_CLUSTER;
+  }
+
+  return Number.POSITIVE_INFINITY;
+}
+
+function logAgentOutput(invocation: AgentInvocation): void {
+  const stdoutExcerpt = buildAgentOutputExcerpt(invocation.stdout);
+  const stderrExcerpt = buildAgentOutputExcerpt(invocation.stderr);
+
+  if (stdoutExcerpt) {
+    core.info(`Agent stdout excerpt:\n${stdoutExcerpt}`);
+  }
+
+  if (stderrExcerpt) {
+    core.warning(`Agent stderr excerpt:\n${stderrExcerpt}`);
+  }
+}
+
+function buildAgentOutputExcerpt(output: string): string {
+  const lines = output
+    .split('\n')
+    .map((line) => line.trimEnd())
+    .filter((line) => line.trim().length > 0);
+
+  if (lines.length === 0) {
+    return '';
+  }
+
+  const excerpt = lines.slice(-40).join('\n');
+  if (excerpt.length <= 4_000) {
+    return excerpt;
+  }
+
+  return excerpt.slice(excerpt.length - 4_000);
 }
 
 function getNewFailures(previous: FailureRecord[], next: FailureRecord[]): FailureRecord[] {

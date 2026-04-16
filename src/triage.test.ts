@@ -3,7 +3,7 @@ import { clusterFailures, prioritizeClusters } from './triage';
 import { FailureRecord } from './types';
 
 describe('clusterFailures', () => {
-  it('groups failures by type and file directory', () => {
+  it('groups non-test failures by type and file directory', () => {
     const failures: FailureRecord[] = [
       { type: 'lint', file: 'src/auth.ts', line: 10, column: 5, message: 'unused var', rule: 'no-unused-vars', rawLog: '', confidence: 0.9 },
       { type: 'lint', file: 'src/auth.ts', line: 20, column: 3, message: 'missing semi', rule: 'semi', rawLog: '', confidence: 0.9 },
@@ -18,6 +18,22 @@ describe('clusterFailures', () => {
 
     const typeCluster = clusters.find((c) => c.type === 'type-error');
     expect(typeCluster?.failures).toHaveLength(1);
+  });
+
+  it('keeps test failures split by file so they can be fixed incrementally', () => {
+    const failures: FailureRecord[] = [
+      { type: 'test-failure', file: 'backend/tests/a.test.py', line: 10, column: null, message: 'first failure', rule: null, rawLog: '', confidence: 0.9 },
+      { type: 'test-failure', file: 'backend/tests/b.test.py', line: 20, column: null, message: 'second failure', rule: null, rawLog: '', confidence: 0.8 },
+      { type: 'test-failure', file: 'backend/tests/b.test.py', line: 30, column: null, message: 'third failure', rule: null, rawLog: '', confidence: 0.7 },
+    ];
+
+    const clusters = clusterFailures(failures);
+
+    expect(clusters).toHaveLength(2);
+    expect(clusters.map((cluster) => cluster.files)).toEqual([
+      ['backend/tests/a.test.py'],
+      ['backend/tests/b.test.py'],
+    ]);
   });
 });
 

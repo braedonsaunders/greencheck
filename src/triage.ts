@@ -39,58 +39,29 @@ function getStrategy(type: FailureType, failures: FailureRecord[]): FixStrategy 
 }
 
 export function clusterFailures(failures: FailureRecord[]): FailureCluster[] {
-  const byType = new Map<FailureType, FailureRecord[]>();
+  const grouped = new Map<FailureType, Map<string, Map<string, FailureRecord[]>>>();
 
   for (const failure of failures) {
-    const existing = byType.get(failure.type) || [];
-    existing.push({
+    const normalizedFailure = {
       ...failure,
       file: normalizePath(failure.file),
-    });
-    byType.set(failure.type, existing);
+    };
+    const typeGroups = grouped.get(normalizedFailure.type) || new Map<string, Map<string, FailureRecord[]>>();
+    const clusterKey = getClusterKey(normalizedFailure.type, normalizedFailure.file);
+    const fileGroups = typeGroups.get(clusterKey) || new Map<string, FailureRecord[]>();
+    const fileFailures = fileGroups.get(normalizedFailure.file) || [];
+    fileFailures.push(normalizedFailure);
+    fileGroups.set(normalizedFailure.file, fileFailures);
+    typeGroups.set(clusterKey, fileGroups);
+    grouped.set(normalizedFailure.type, typeGroups);
   }
 
   const clusters: FailureCluster[] = [];
 
-  for (const [type, typeFailures] of byType) {
-    const byFile = new Map<string, FailureRecord[]>();
-    for (const failure of typeFailures) {
-      const existing = byFile.get(failure.file) || [];
-      existing.push(failure);
-      byFile.set(failure.file, existing);
-    }
-
-    const fileGroups: Map<string, FailureRecord[]>[] = [];
-    const visited = new Set<string>();
-
-    for (const [file, fileFailures] of byFile) {
-      if (visited.has(file)) {
-        continue;
-      }
-
-      visited.add(file);
-
-      const group = new Map<string, FailureRecord[]>();
-      group.set(file, fileFailures);
-
-      const directory = getDirectory(file);
-      for (const [otherFile, otherFailures] of byFile) {
-        if (visited.has(otherFile)) {
-          continue;
-        }
-
-        if (directory === getDirectory(otherFile)) {
-          visited.add(otherFile);
-          group.set(otherFile, otherFailures);
-        }
-      }
-
-      fileGroups.push(group);
-    }
-
-    for (const group of fileGroups) {
-      const groupedFailures = Array.from(group.values()).flat();
-      const files = Array.from(group.keys());
+  for (const [type, typeGroups] of grouped) {
+    for (const fileGroups of typeGroups.values()) {
+      const groupedFailures = Array.from(fileGroups.values()).flat();
+      const files = Array.from(fileGroups.keys());
 
       clusters.push({
         type,
@@ -117,6 +88,10 @@ export function prioritizeClusters(clusters: FailureCluster[]): FailureCluster[]
       if (b.strategy === 'deterministic') return 1;
       if (a.strategy === 'deterministic+llm') return -1;
       if (b.strategy === 'deterministic+llm') return 1;
+    }
+
+    if (a.failures.length !== b.failures.length) {
+      return b.failures.length - a.failures.length;
     }
 
     return averageConfidence(b.failures) - averageConfidence(a.failures);
@@ -173,6 +148,14 @@ function getDirectory(file: string): string {
   const normalized = normalizePath(file);
   const lastSlash = normalized.lastIndexOf('/');
   return lastSlash === -1 ? '' : normalized.slice(0, lastSlash);
+}
+
+function getClusterKey(type: FailureType, file: string): string {
+  if (type === 'test-failure') {
+    return normalizePath(file);
+  }
+
+  return getDirectory(file);
 }
 
 function averageConfidence(failures: FailureRecord[]): number {

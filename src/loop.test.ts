@@ -119,4 +119,83 @@ describe('buildAgentCluster', () => {
     expect(cluster.failures).toHaveLength(2);
     expect(cluster.failures.every((failure) => failure.type === 'lint')).toBe(true);
   });
+
+  it('caps merged test-failure clusters to a smaller batch', () => {
+    const logResult: LogParserResult = {
+      failures: [
+        {
+          type: 'test-failure',
+          file: 'backend/tests/test_signal_cursor.py',
+          line: 10,
+          column: null,
+          message: 'cursor failure 1',
+          rule: null,
+          rawLog: '',
+          confidence: 0.95,
+        },
+        {
+          type: 'test-failure',
+          file: 'backend/tests/test_signal_cursor.py',
+          line: 20,
+          column: null,
+          message: 'cursor failure 2',
+          rule: null,
+          rawLog: '',
+          confidence: 0.95,
+        },
+        {
+          type: 'test-failure',
+          file: 'backend/tests/test_signal_cursor.py',
+          line: 30,
+          column: null,
+          message: 'cursor failure 3',
+          rule: null,
+          rawLog: '',
+          confidence: 0.95,
+        },
+        {
+          type: 'test-failure',
+          file: 'backend/tests/test_signal_cursor.py',
+          line: 40,
+          column: null,
+          message: 'cursor failure 4',
+          rule: null,
+          rawLog: '',
+          confidence: 0.95,
+        },
+        {
+          type: 'test-failure',
+          file: 'backend/tests/test_routes.py',
+          line: 50,
+          column: null,
+          message: 'routes failure',
+          rule: null,
+          rawLog: '',
+          confidence: 0.8,
+        },
+        {
+          type: 'test-failure',
+          file: 'backend/tests/test_tradability.py',
+          line: 60,
+          column: null,
+          message: 'tradability failure',
+          rule: null,
+          rawLog: '',
+          confidence: 0.7,
+        },
+      ],
+      rawLog: 'raw log',
+      parserUsed: 'pytest',
+      logPath: '.greencheck/logs/run.log',
+    };
+
+    const cluster = buildAgentCluster(logResult, createConfig(10));
+
+    expect(cluster.type).toBe('test-failure');
+    expect(cluster.files).toEqual([
+      'backend/tests/test_signal_cursor.py',
+      'backend/tests/test_routes.py',
+    ]);
+    expect(cluster.failures).toHaveLength(5);
+  });
 });
