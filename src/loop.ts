@@ -402,9 +402,35 @@ function getNewFailures(previous: FailureRecord[], next: FailureRecord[]): Failu
 }
 
 function getFailureKey(failure: FailureRecord): string {
+  const stableTestKey = getStableTestFailureKey(failure);
+  if (stableTestKey) {
+    return stableTestKey;
+  }
+
   return `${normalizePath(failure.file)}:${failure.line}:${failure.column}:${failure.type}:${failure.message}`;
+}
+
+function getStableTestFailureKey(failure: FailureRecord): string | null {
+  if (failure.type !== 'test-failure') {
+    return null;
+  }
+
+  const summaryLine = failure.rawLog.split('\n')[0]?.trim() || '';
+  const failedMatch = summaryLine.match(/^FAILED\s+(.+?)(?:\s+-\s+.+)?$/);
+  if (failedMatch) {
+    return `test:${normalizePath(failedMatch[1])}`;
+  }
+
+  const errorMatch = summaryLine.match(/^ERROR\s+(.+?)(?:\s+-\s+.+)?$/);
+  if (errorMatch) {
+    return `test:${normalizePath(errorMatch[1])}`;
+  }
+
+  return null;
 }
 
 function getRemainingBudget(timeoutMs: number, runStartedAt: number): number {
   return Math.max(15_000, timeoutMs - (Date.now() - runStartedAt));
 }
+
+export { getFailureKey };

@@ -40372,6 +40372,7 @@ var __importStar = (this && this.__importStar) || (function () {
 Object.defineProperty(exports, "__esModule", ({ value: true }));
 exports.runFixLoop = runFixLoop;
 exports.buildAgentCluster = buildAgentCluster;
+exports.getFailureKey = getFailureKey;
 const core = __importStar(__nccwpck_require__(7484));
 const agent_1 = __nccwpck_require__(1598);
 const ci_trigger_1 = __nccwpck_require__(4742);
@@ -40667,7 +40668,26 @@ function getNewFailures(previous, next) {
     return next.filter((failure) => !previousKeys.has(getFailureKey(failure)));
 }
 function getFailureKey(failure) {
+    const stableTestKey = getStableTestFailureKey(failure);
+    if (stableTestKey) {
+        return stableTestKey;
+    }
     return `${(0, glob_1.normalizePath)(failure.file)}:${failure.line}:${failure.column}:${failure.type}:${failure.message}`;
+}
+function getStableTestFailureKey(failure) {
+    if (failure.type !== 'test-failure') {
+        return null;
+    }
+    const summaryLine = failure.rawLog.split('\n')[0]?.trim() || '';
+    const failedMatch = summaryLine.match(/^FAILED\s+(.+?)(?:\s+-\s+.+)?$/);
+    if (failedMatch) {
+        return `test:${(0, glob_1.normalizePath)(failedMatch[1])}`;
+    }
+    const errorMatch = summaryLine.match(/^ERROR\s+(.+?)(?:\s+-\s+.+)?$/);
+    if (errorMatch) {
+        return `test:${(0, glob_1.normalizePath)(errorMatch[1])}`;
+    }
+    return null;
 }
 function getRemainingBudget(timeoutMs, runStartedAt) {
     return Math.max(15_000, timeoutMs - (Date.now() - runStartedAt));

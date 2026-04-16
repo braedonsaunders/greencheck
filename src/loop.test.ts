@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { buildAgentCluster } from './loop';
+import { buildAgentCluster, getFailureKey } from './loop';
 import { GreenCheckConfig, LogParserResult } from './types';
 
 function createConfig(maxFilesPerFix = 10): GreenCheckConfig {
@@ -197,5 +197,58 @@ describe('buildAgentCluster', () => {
       'backend/tests/test_routes.py',
     ]);
     expect(cluster.failures).toHaveLength(5);
+  });
+});
+
+describe('getFailureKey', () => {
+  it('uses the stable pytest test identity instead of volatile assertion text', () => {
+    const first = getFailureKey({
+      type: 'test-failure',
+      file: 'backend/tests/test_trader_signal_cursor_scanning.py',
+      line: null,
+      column: null,
+      message: "assert ['abc123'] == ['def456']",
+      rule: null,
+      rawLog: "FAILED tests/test_trader_signal_cursor_scanning.py::test_unconsumed_signals_default_to_pending_and_use_cursor - AssertionError: assert ['abc123'] == ['def456']",
+      confidence: 0.7,
+    });
+    const second = getFailureKey({
+      type: 'test-failure',
+      file: 'backend/tests/test_trader_signal_cursor_scanning.py',
+      line: null,
+      column: null,
+      message: "assert ['xyz789'] == ['uvw000']",
+      rule: null,
+      rawLog: "FAILED tests/test_trader_signal_cursor_scanning.py::test_unconsumed_signals_default_to_pending_and_use_cursor - AssertionError: assert ['xyz789'] == ['uvw000']",
+      confidence: 0.7,
+    });
+
+    expect(first).toBe('test:tests/test_trader_signal_cursor_scanning.py::test_unconsumed_signals_default_to_pending_and_use_cursor');
+    expect(second).toBe(first);
+  });
+
+  it('keeps distinct pytest test cases separate even within the same file', () => {
+    const first = getFailureKey({
+      type: 'test-failure',
+      file: 'backend/tests/test_market_runtime_reactive_reference_updates.py',
+      line: null,
+      column: null,
+      message: 'assert 2 == 3',
+      rule: null,
+      rawLog: 'FAILED tests/test_market_runtime_reactive_reference_updates.py::test_refresh_event_catalog_skips_full_reload_when_catalog_unchanged - AssertionError: assert 2 == 3',
+      confidence: 0.7,
+    });
+    const second = getFailureKey({
+      type: 'test-failure',
+      file: 'backend/tests/test_market_runtime_reactive_reference_updates.py',
+      line: null,
+      column: null,
+      message: 'assert None is not None',
+      rule: null,
+      rawLog: 'FAILED tests/test_market_runtime_reactive_reference_updates.py::test_run_loop_iteration_schedules_catalog_refresh_without_waiting - assert None is not None',
+      confidence: 0.7,
+    });
+
+    expect(first).not.toBe(second);
   });
 });
