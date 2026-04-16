@@ -198,6 +198,88 @@ describe('buildAgentCluster', () => {
     ]);
     expect(cluster.failures).toHaveLength(5);
   });
+
+  it('caps a single oversized test cluster before it reaches the agent', () => {
+    const logResult: LogParserResult = {
+      failures: [
+        {
+          type: 'test-failure',
+          file: 'backend/tests/test_trader_orchestrator_worker.py',
+          line: null,
+          column: null,
+          message: 'worker failure 1',
+          rule: null,
+          rawLog: 'FAILED tests/test_trader_orchestrator_worker.py::test_one - worker failure 1',
+          confidence: 0.95,
+        },
+        {
+          type: 'test-failure',
+          file: 'backend/tests/test_trader_orchestrator_worker.py',
+          line: null,
+          column: null,
+          message: 'worker failure 2',
+          rule: null,
+          rawLog: 'FAILED tests/test_trader_orchestrator_worker.py::test_two - worker failure 2',
+          confidence: 0.95,
+        },
+        {
+          type: 'test-failure',
+          file: 'backend/tests/test_trader_orchestrator_worker.py',
+          line: null,
+          column: null,
+          message: 'worker failure 3',
+          rule: null,
+          rawLog: 'FAILED tests/test_trader_orchestrator_worker.py::test_three - worker failure 3',
+          confidence: 0.95,
+        },
+        {
+          type: 'test-failure',
+          file: 'backend/tests/test_trader_orchestrator_worker.py',
+          line: null,
+          column: null,
+          message: 'worker failure 4',
+          rule: null,
+          rawLog: 'FAILED tests/test_trader_orchestrator_worker.py::test_four - worker failure 4',
+          confidence: 0.95,
+        },
+        {
+          type: 'test-failure',
+          file: 'backend/tests/test_trader_orchestrator_worker.py',
+          line: null,
+          column: null,
+          message: 'worker failure 5',
+          rule: null,
+          rawLog: 'FAILED tests/test_trader_orchestrator_worker.py::test_five - worker failure 5',
+          confidence: 0.95,
+        },
+        {
+          type: 'test-failure',
+          file: 'backend/tests/test_trader_orchestrator_worker.py',
+          line: null,
+          column: null,
+          message: 'worker failure 6',
+          rule: null,
+          rawLog: 'FAILED tests/test_trader_orchestrator_worker.py::test_six - worker failure 6',
+          confidence: 0.95,
+        },
+      ],
+      rawLog: 'raw log',
+      parserUsed: 'pytest',
+      logPath: '.greencheck/logs/run.log',
+    };
+
+    const cluster = buildAgentCluster(logResult, createConfig(10));
+
+    expect(cluster.files).toEqual(['backend/tests/test_trader_orchestrator_worker.py']);
+    expect(cluster.failures).toHaveLength(5);
+    expect(cluster.failures.map((failure) => failure.message)).toEqual([
+      'worker failure 1',
+      'worker failure 2',
+      'worker failure 3',
+      'worker failure 4',
+      'worker failure 5',
+    ]);
+  });
 });
 
 describe('getFailureKey', () => {

@@ -40586,11 +40586,13 @@ function buildAgentCluster(logResult, config) {
         };
     }
     const [selected, ...remaining] = prioritized;
-    const files = [...selected.files];
-    const failures = [...selected.failures];
-    const seenFiles = new Set(files);
     const fileLimit = getClusterFileLimit(selected, config);
     const failureLimit = getClusterFailureLimit(selected);
+    const files = [...selected.files];
+    const failures = selected.type === 'test-failure'
+        ? [...selected.failures.slice(0, failureLimit)]
+        : [...selected.failures];
+    const seenFiles = new Set(files);
     for (const cluster of remaining) {
         if (cluster.type !== selected.type) {
             break;
