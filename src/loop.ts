@@ -12,7 +12,7 @@ import { normalizePath } from './glob';
 type Octokit = ReturnType<typeof github.getOctokit>;
 
 const TEST_FAILURE_MAX_FILES_PER_CLUSTER = 3;
-const TEST_FAILURE_MAX_FAILURES_PER_CLUSTER = 3;
+const TEST_FAILURE_MAX_FAILURES_PER_CLUSTER = 1;
 
 export async function runFixLoop(
   octokit: Octokit,

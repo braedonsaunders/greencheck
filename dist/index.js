@@ -40412,7 +40412,7 @@ const checkpoint_1 = __nccwpck_require__(4213);
 const triage_1 = __nccwpck_require__(3235);
 const glob_1 = __nccwpck_require__(5601);
 const TEST_FAILURE_MAX_FILES_PER_CLUSTER = 3;
-const TEST_FAILURE_MAX_FAILURES_PER_CLUSTER = 3;
+const TEST_FAILURE_MAX_FAILURES_PER_CLUSTER = 1;
 async function runFixLoop(octokit, owner, repo, state, config) {
     const runStartedAt = new Date(state.startedAt).getTime();
     for (let pass = state.passes.length + 1; pass <= config.maxPasses; pass++) {
