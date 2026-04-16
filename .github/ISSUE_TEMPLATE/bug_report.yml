@@ -50,6 +50,6 @@ body:
     id: version
     attributes:
       label: greencheck version
-      placeholder: v0.1.1
+      placeholder: v0.1.2
     validations:
       required: true

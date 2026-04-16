@@ -68,5 +68,5 @@ outputs:
     description: 'Estimated LLM API cost for this run'
 
 runs:
-  using: 'node20'
+  using: 'node24'
   main: 'dist/index.js'
