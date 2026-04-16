@@ -38667,7 +38667,7 @@ function buildPrompt(context, cluster) {
     const logAccess = context.logPath
         ? `- Full workflow logs are saved locally at \`${context.logPath}\``
         : '- Full workflow logs could not be saved locally; rely on git history, workflow files, and repo tooling';
-    const logSummary = buildLogSummary(context.rawLog);
+    const logSummary = buildLogSummary(context.rawLog, cluster);
     const logSummarySection = logSummary
         ? `
 ## Failure excerpt from the workflow logs
@@ -38718,6 +38718,12 @@ function buildParsedFailureSection(context, cluster) {
     const parserLine = context.parserUsed && context.parserUsed !== 'none'
         ? `- Parser(s): ${context.parserUsed}`
         : '- Parser(s): none';
+    const exactTestTargets = extractExactTestTargets(cluster);
+    const testTargetSection = exactTestTargets.length > 0
+        ? `- Exact pytest targets:
+${exactTestTargets.map((target) => `  - \`${target}\``).join('\n')}
+`
+        : '';
     return `
 ## Parsed hints from greencheck
 - Failure type: ${cluster.type}
@@ -38725,6 +38731,7 @@ function buildParsedFailureSection(context, cluster) {
 ${parserLine}
 - Focus files:
 ${focusFiles}
+${testTargetSection}
 - Concrete failures:
 ${formatParsedFailures(cluster)}
 `;
@@ -38788,12 +38795,12 @@ function sanitizeCredential(value) {
         .replace(/\s+/g, '');
     return sanitized || null;
 }
-function buildLogSummary(rawLog) {
+function buildLogSummary(rawLog, cluster) {
     if (!rawLog) {
         return '';
     }
     const commands = extractCommands(rawLog).slice(0, 8);
-    const failureLines = extractFailureSnippet(rawLog).slice(0, 80);
+    const failureLines = extractFailureSnippet(rawLog, cluster).slice(0, 40);
     const sections = [];
     if (commands.length > 0) {
         sections.push('Commands observed in CI:');
@@ -38802,7 +38809,7 @@ function buildLogSummary(rawLog) {
         sections.push('```');
     }
     if (failureLines.length > 0) {
-        sections.push('Failure-focused log excerpt:');
+        sections.push(cluster.failures.length > 0 ? 'Cluster-focused log excerpt:' : 'Failure-focused log excerpt:');
         sections.push('```text');
         sections.push(...failureLines);
         sections.push('```');
@@ -38823,7 +38830,13 @@ function extractCommands(rawLog) {
     }
     return commands;
 }
-function extractFailureSnippet(rawLog) {
+function extractFailureSnippet(rawLog, cluster) {
+    const exactFailureLines = cluster.failures
+        .map((failure) => failure.rawLog.split('\n')[0]?.trim() || '')
+        .filter(Boolean);
+    if (exactFailureLines.length > 0) {
+        return [...new Set(exactFailureLines)];
+    }
     const lines = rawLog.split('\n');
     const matches = new Set();
     for (let index = 0; index < lines.length; index++) {
@@ -38840,6 +38853,23 @@ function extractFailureSnippet(rawLog) {
         .sort((a, b) => a - b)
         .map((index) => lines[index])
         .filter(Boolean);
+}
+function extractExactTestTargets(cluster) {
+    if (cluster.type !== 'test-failure') {
+        return [];
+    }
+    const targets = [];
+    for (const failure of cluster.failures) {
+        const summaryLine = failure.rawLog.split('\n')[0]?.trim() || '';
+        const match = summaryLine.match(/^(?:FAILED|ERROR)\s+(.+?)(?:\s+-\s+.+)?$/);
+        if (match) {
+            const target = match[1].trim();
+            if (target && !targets.includes(target)) {
+                targets.push(target);
+            }
+        }
+    }
+    return targets;
 }
 async function invokeClaude(prompt, config, workDir) {
     const args = [
@@ -40382,7 +40412,7 @@ const checkpoint_1 = __nccwpck_require__(4213);
 const triage_1 = __nccwpck_require__(3235);
 const glob_1 = __nccwpck_require__(5601);
 const TEST_FAILURE_MAX_FILES_PER_CLUSTER = 3;
-const TEST_FAILURE_MAX_FAILURES_PER_CLUSTER = 5;
+const TEST_FAILURE_MAX_FAILURES_PER_CLUSTER = 3;
 async function runFixLoop(octokit, owner, repo, state, config) {
     const runStartedAt = new Date(state.startedAt).getTime();
     for (let pass = state.passes.length + 1; pass <= config.maxPasses; pass++) {

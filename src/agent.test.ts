@@ -70,4 +70,41 @@ describe('buildPrompt', () => {
     expect(prompt).toContain('`backend/api/routes.py`');
     expect(prompt).toContain('`backend/api/routes.py:13:24` (F401): unused import');
   });
+
+  it('focuses pytest prompts on the selected cluster instead of the whole failing run', () => {
+    const prompt = buildPrompt(
+      createContext({
+        parserUsed: 'pytest',
+        rawLog: [
+          'Run pytest backend/tests',
+          '=================================== FAILURES ===================================',
+          'FAILED tests/test_trader_orchestrator_worker.py::test_one - AssertionError: worker failure',
+          'FAILED tests/test_other.py::test_two - AssertionError: unrelated failure',
+        ].join('\n'),
+      }),
+      createCluster({
+        type: 'test-failure',
+        files: ['backend/tests/test_trader_orchestrator_worker.py'],
+        failures: [
+          {
+            type: 'test-failure',
+            file: 'backend/tests/test_trader_orchestrator_worker.py',
+            line: null,
+            column: null,
+            message: 'worker failure',
+            rule: null,
+            rawLog: 'FAILED tests/test_trader_orchestrator_worker.py::test_one - AssertionError: worker failure',
+            confidence: 0.9,
+          },
+        ],
+        strategy: 'llm',
+      }),
+    );
+
+    expect(prompt).toContain('Exact pytest targets:');
+    expect(prompt).toContain('`tests/test_trader_orchestrator_worker.py::test_one`');
+    expect(prompt).toContain('Cluster-focused log excerpt:');
+    expect(prompt).toContain('FAILED tests/test_trader_orchestrator_worker.py::test_one - AssertionError: worker failure');
+    expect(prompt).not.toContain('FAILED tests/test_other.py::test_two - AssertionError: unrelated failure');
+  });
 });

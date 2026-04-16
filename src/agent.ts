@@ -6,7 +6,7 @@ function buildPrompt(context: AgentContext, cluster: FailureCluster): string {
   const logAccess = context.logPath
     ? `- Full workflow logs are saved locally at \`${context.logPath}\``
     : '- Full workflow logs could not be saved locally; rely on git history, workflow files, and repo tooling';
-  const logSummary = buildLogSummary(context.rawLog);
+  const logSummary = buildLogSummary(context.rawLog, cluster);
   const logSummarySection = logSummary
     ? `
 ## Failure excerpt from the workflow logs
@@ -60,6 +60,12 @@ function buildParsedFailureSection(context: AgentContext, cluster: FailureCluste
   const parserLine = context.parserUsed && context.parserUsed !== 'none'
     ? `- Parser(s): ${context.parserUsed}`
     : '- Parser(s): none';
+  const exactTestTargets = extractExactTestTargets(cluster);
+  const testTargetSection = exactTestTargets.length > 0
+    ? `- Exact pytest targets:
+${exactTestTargets.map((target) => `  - \`${target}\``).join('\n')}
+`
+    : '';
 
   return `
 ## Parsed hints from greencheck
@@ -68,6 +74,7 @@ function buildParsedFailureSection(context: AgentContext, cluster: FailureCluste
 ${parserLine}
 - Focus files:
 ${focusFiles}
+${testTargetSection}
 - Concrete failures:
 ${formatParsedFailures(cluster)}
 `;
@@ -142,13 +149,13 @@ function sanitizeCredential(value: string | null): string | null {
   return sanitized || null;
 }
 
-function buildLogSummary(rawLog: string): string {
+function buildLogSummary(rawLog: string, cluster: FailureCluster): string {
   if (!rawLog) {
     return '';
   }
 
   const commands = extractCommands(rawLog).slice(0, 8);
-  const failureLines = extractFailureSnippet(rawLog).slice(0, 80);
+  const failureLines = extractFailureSnippet(rawLog, cluster).slice(0, 40);
   const sections: string[] = [];
 
   if (commands.length > 0) {
@@ -159,7 +166,7 @@ function buildLogSummary(rawLog: string): string {
   }
 
   if (failureLines.length > 0) {
-    sections.push('Failure-focused log excerpt:');
+    sections.push(cluster.failures.length > 0 ? 'Cluster-focused log excerpt:' : 'Failure-focused log excerpt:');
     sections.push('```text');
     sections.push(...failureLines);
     sections.push('```');
@@ -185,7 +192,14 @@ function extractCommands(rawLog: string): string[] {
   return commands;
 }
 
-function extractFailureSnippet(rawLog: string): string[] {
+function extractFailureSnippet(rawLog: string, cluster: FailureCluster): string[] {
+  const exactFailureLines = cluster.failures
+    .map((failure) => failure.rawLog.split('\n')[0]?.trim() || '')
+    .filter(Boolean);
+  if (exactFailureLines.length > 0) {
+    return [...new Set(exactFailureLines)];
+  }
+
   const lines = rawLog.split('\n');
   const matches = new Set<number>();
 
@@ -204,6 +218,26 @@ function extractFailureSnippet(rawLog: string): string[] {
     .sort((a, b) => a - b)
     .map((index) => lines[index])
     .filter(Boolean);
+}
+
+function extractExactTestTargets(cluster: FailureCluster): string[] {
+  if (cluster.type !== 'test-failure') {
+    return [];
+  }
+
+  const targets: string[] = [];
+  for (const failure of cluster.failures) {
+    const summaryLine = failure.rawLog.split('\n')[0]?.trim() || '';
+    const match = summaryLine.match(/^(?:FAILED|ERROR)\s+(.+?)(?:\s+-\s+.+)?$/);
+    if (match) {
+      const target = match[1].trim();
+      if (target && !targets.includes(target)) {
+        targets.push(target);
+      }
+    }
+  }
+
+  return targets;
 }
 
 async function invokeClaude(

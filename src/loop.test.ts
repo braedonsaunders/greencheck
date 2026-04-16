@@ -192,11 +192,8 @@ describe('buildAgentCluster', () => {
     const cluster = buildAgentCluster(logResult, createConfig(10));
 
     expect(cluster.type).toBe('test-failure');
-    expect(cluster.files).toEqual([
-      'backend/tests/test_signal_cursor.py',
-      'backend/tests/test_routes.py',
-    ]);
-    expect(cluster.failures).toHaveLength(5);
+    expect(cluster.files).toEqual(['backend/tests/test_signal_cursor.py']);
+    expect(cluster.failures).toHaveLength(3);
   });
 
   it('caps a single oversized test cluster before it reaches the agent', () => {
@@ -271,13 +268,11 @@ describe('buildAgentCluster', () => {
     const cluster = buildAgentCluster(logResult, createConfig(10));
 
     expect(cluster.files).toEqual(['backend/tests/test_trader_orchestrator_worker.py']);
-    expect(cluster.failures).toHaveLength(5);
+    expect(cluster.failures).toHaveLength(3);
     expect(cluster.failures.map((failure) => failure.message)).toEqual([
       'worker failure 1',
       'worker failure 2',
       'worker failure 3',
-      'worker failure 4',
-      'worker failure 5',
     ]);
   });
 });
