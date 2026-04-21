@@ -1,7 +1,7 @@
 ---
 name: greencheck-setup
 description: Install and configure greencheck — a GitHub Action that automatically fixes failed CI runs using Claude Code or Codex. Use this skill when a user wants automated CI failure remediation in their repository.
-version: 0.1.2
+version: 0.1.3
 author: Braedon Saunders
 license: MIT
 metadata:
