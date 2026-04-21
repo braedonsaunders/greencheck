@@ -1,5 +1,8 @@
 # Advanced greencheck configuration example.
 # Copy to .github/workflows/greencheck.yml and customize.
+# Use a GREENCHECK_TOKEN with "contents: write" and "actions: write".
+# Add "workflow_dispatch:" to the watched CI workflow so greencheck can
+# explicitly trigger a follow-up run if a pushed fix does not start Actions.
 
 name: greencheck
 

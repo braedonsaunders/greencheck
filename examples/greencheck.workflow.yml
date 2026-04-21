@@ -2,10 +2,12 @@
 # Copy this file to .github/workflows/greencheck.yml in your repository.
 #
 # Prerequisites:
-#   1. Create a PAT (fine-grained) with "contents: write" and "actions: read"
+#   1. Create a PAT (fine-grained) with "contents: write" and "actions: write"
 #      and save it as GREENCHECK_TOKEN in your repo secrets.
 #   2. Add your LLM API key (ANTHROPIC_API_KEY or OPENAI_API_KEY) to secrets.
 #   3. Ensure your CI workflow name matches the "workflows" list below.
+#   4. Add "workflow_dispatch:" to the watched CI workflow so greencheck can
+#      trigger a follow-up run if a pushed fix does not automatically start Actions.
 
 name: greencheck
 

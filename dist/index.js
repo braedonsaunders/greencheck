@@ -39152,11 +39152,18 @@ async function triggerWorkflowDispatch(octokit, owner, repo, workflowId, branch)
         return false;
     }
 }
-async function waitForWorkflowCompletion(octokit, owner, repo, branch, headSha, timeoutMs = 10 * 60 * 1000, cooldownMs = 30 * 1000) {
+async function waitForWorkflowCompletion(octokit, owner, repo, branch, headSha, options = {}) {
+    const timeoutMs = options.timeoutMs ?? 10 * 60 * 1000;
+    const cooldownMs = options.cooldownMs ?? 30 * 1000;
+    const pollIntervalMs = options.pollIntervalMs ?? 15_000;
+    const dispatchWorkflowId = options.dispatchWorkflowId ?? null;
+    const dispatchOctokit = options.dispatchOctokit ?? octokit;
+    const emptyPollsBeforeDispatch = Math.max(1, options.emptyPollsBeforeDispatch ?? 3);
     core.info(`Waiting for CI to complete on ${branch} (sha: ${headSha.substring(0, 7)})...`);
     await sleep(cooldownMs);
     const startedAt = Date.now();
-    const pollInterval = 15_000;
+    let emptyPolls = 0;
+    let dispatchAttempted = false;
     while (Date.now() - startedAt < timeoutMs) {
         try {
             const { data } = await octokit.rest.actions.listWorkflowRunsForRepo({
@@ -39167,15 +39174,27 @@ async function waitForWorkflowCompletion(octokit, owner, repo, branch, headSha, 
             });
             const runs = data.workflow_runs;
             if (runs.length === 0) {
-                core.info('No workflow runs found yet, waiting...');
-                await sleep(pollInterval);
+                emptyPolls += 1;
+                if (!dispatchAttempted && dispatchWorkflowId && emptyPolls >= emptyPollsBeforeDispatch) {
+                    dispatchAttempted = true;
+                    core.warning(`No workflow runs were created for ${headSha.substring(0, 7)} after ${emptyPolls} poll(s); attempting workflow_dispatch fallback for workflow ${dispatchWorkflowId}.`);
+                    const dispatched = await triggerWorkflowDispatch(dispatchOctokit, owner, repo, dispatchWorkflowId, branch);
+                    if (!dispatched) {
+                        core.warning('Workflow dispatch fallback failed. Ensure the watched workflow declares workflow_dispatch and that trigger-token can run workflows.');
+                    }
+                }
+                else {
+                    core.info('No workflow runs found yet, waiting...');
+                }
+                await sleep(pollIntervalMs);
                 continue;
             }
+            emptyPolls = 0;
             const allCompleted = runs.every((run) => run.status === 'completed');
             if (!allCompleted) {
                 const inProgress = runs.filter((run) => run.status !== 'completed');
                 core.info(`${inProgress.length} workflow(s) still running...`);
-                await sleep(pollInterval);
+                await sleep(pollIntervalMs);
                 continue;
             }
             const failedRun = runs.find((run) => run.conclusion === 'failure');
@@ -39191,7 +39210,7 @@ async function waitForWorkflowCompletion(octokit, owner, repo, branch, headSha, 
         }
         catch (error) {
             core.warning(`Error checking workflow status: ${error}`);
-            await sleep(pollInterval);
+            await sleep(pollIntervalMs);
         }
     }
     core.warning(`Timed out waiting for CI after ${timeoutMs / 1000}s`);
@@ -39223,6 +39242,7 @@ async function getLatestRunForBranch(octokit, owner, repo, branch, workflowName)
 function toCiWorkflowRun(run) {
     return {
         id: run.id,
+        workflowId: run.workflow_id ?? null,
         name: run.name || '',
         headBranch: run.head_branch || '',
         headSha: run.head_sha,
@@ -39939,10 +39959,11 @@ async function run() {
         if (currentSha !== failedRun.headSha) {
             core.warning(`Branch '${failedRun.headBranch}' advanced from ${failedRun.headSha.substring(0, 7)} to ${currentSha.substring(0, 7)}; continuing with the latest branch state while using the failed run logs as context.`);
         }
-        let state = getInitialState(failedRun.id, failedRun.name, failedRun.htmlUrl, failedRun.headBranch, failedRun.headSha, prNumber);
+        let state = getInitialState(failedRun.id, failedRun.workflowId, failedRun.name, failedRun.htmlUrl, failedRun.headBranch, failedRun.headSha, prNumber);
         const checkpoint = (0, checkpoint_1.loadCheckpoint)();
         if (checkpoint && shouldResumeCheckpoint(checkpoint, failedRun.id, failedRun.headBranch)) {
             state = checkpoint;
+            state.workflowId = checkpoint.workflowId ?? failedRun.workflowId ?? null;
             state.latestFailures = checkpoint.latestFailures || [];
             state.latestParserUsed = checkpoint.latestParserUsed || 'none';
             state.latestLogPath = checkpoint.latestLogPath || null;
@@ -39995,10 +40016,11 @@ function getWorkflowRunId() {
     }
     return null;
 }
-function getInitialState(workflowRunId, workflowName, workflowUrl, branch, headSha, prNumber) {
+function getInitialState(workflowRunId, workflowId, workflowName, workflowUrl, branch, headSha, prNumber) {
     return {
         runId: Date.now(),
         workflowRunId,
+        workflowId,
         workflowName,
         workflowUrl,
         branch,
@@ -40155,6 +40177,7 @@ async function getFailedWorkflowRun(octokit, owner, repo, workflowRunId) {
         }
         return {
             id: run.id,
+            workflowId: run.workflow_id ?? null,
             name: run.name || '',
             headBranch: run.head_branch || '',
             headSha: run.head_sha,
@@ -40404,6 +40427,7 @@ exports.runFixLoop = runFixLoop;
 exports.buildAgentCluster = buildAgentCluster;
 exports.getFailureKey = getFailureKey;
 const core = __importStar(__nccwpck_require__(7484));
+const github = __importStar(__nccwpck_require__(3228));
 const agent_1 = __nccwpck_require__(1598);
 const ci_trigger_1 = __nccwpck_require__(4742);
 const git_ops_1 = __nccwpck_require__(7482);
@@ -40415,6 +40439,7 @@ const TEST_FAILURE_MAX_FILES_PER_CLUSTER = 3;
 const TEST_FAILURE_MAX_FAILURES_PER_CLUSTER = 1;
 async function runFixLoop(octokit, owner, repo, state, config) {
     const runStartedAt = new Date(state.startedAt).getTime();
+    const triggerOctokit = github.getOctokit(config.triggerToken);
     for (let pass = state.passes.length + 1; pass <= config.maxPasses; pass++) {
         const elapsed = Date.now() - runStartedAt;
         if (elapsed >= config.timeoutMs) {
@@ -40461,13 +40486,18 @@ async function runFixLoop(octokit, owner, repo, state, config) {
             break;
         }
         const newSha = await (0, git_ops_1.getCurrentSha)();
-        const ciResult = await (0, ci_trigger_1.waitForWorkflowCompletion)(octokit, owner, repo, state.branch, newSha, getRemainingBudget(config.timeoutMs, runStartedAt));
+        const ciResult = await (0, ci_trigger_1.waitForWorkflowCompletion)(octokit, owner, repo, state.branch, newSha, {
+            timeoutMs: getRemainingBudget(config.timeoutMs, runStartedAt),
+            dispatchWorkflowId: state.workflowId,
+            dispatchOctokit: triggerOctokit,
+        });
         if (!ciResult) {
             core.warning('Timed out waiting for CI');
             state.result = 'failed';
             break;
         }
         state.workflowRunId = ciResult.id;
+        state.workflowId = ciResult.workflowId ?? state.workflowId;
         state.headSha = ciResult.headSha;
         if (ciResult.conclusion === 'success') {
             core.info('CI is green. All tracked failures are fixed.');
@@ -40572,11 +40602,16 @@ async function revertRegressiveCommit(octokit, owner, repo, state, commitSha, co
         return false;
     }
     const revertSha = await (0, git_ops_1.getCurrentSha)();
-    const revertedRun = await (0, ci_trigger_1.waitForWorkflowCompletion)(octokit, owner, repo, state.branch, revertSha, getRemainingBudget(config.timeoutMs, runStartedAt));
+    const revertedRun = await (0, ci_trigger_1.waitForWorkflowCompletion)(octokit, owner, repo, state.branch, revertSha, {
+        timeoutMs: getRemainingBudget(config.timeoutMs, runStartedAt),
+        dispatchWorkflowId: state.workflowId,
+        dispatchOctokit: github.getOctokit(config.triggerToken),
+    });
     if (!revertedRun) {
         return false;
     }
     state.workflowRunId = revertedRun.id;
+    state.workflowId = revertedRun.workflowId ?? state.workflowId;
     state.headSha = revertedRun.headSha;
     if (revertedRun.conclusion === 'success') {
         state.latestFailures = [];

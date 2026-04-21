@@ -10,6 +10,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Updated install examples and setup guidance so `actions/checkout` uses the default `GITHUB_TOKEN`
 - Clarified that `GREENCHECK_TOKEN` should be reserved for greencheck's `trigger-token` push/rerun flow
 - Added troubleshooting guidance for checkout auth failures in `workflow_run` setups
+- Added a `workflow_dispatch` fallback when a pushed fix commit does not immediately create a follow-up GitHub Actions run
+- Documented that watched CI workflows should declare `workflow_dispatch:` and that `GREENCHECK_TOKEN` needs `actions: write` for that fallback
 
 ## [0.1.1] - 2026-03-19
 

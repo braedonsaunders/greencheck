@@ -22,6 +22,7 @@ export async function runFixLoop(
   config: GreenCheckConfig,
 ): Promise<RunState> {
   const runStartedAt = new Date(state.startedAt).getTime();
+  const triggerOctokit = github.getOctokit(config.triggerToken);
 
   for (let pass = state.passes.length + 1; pass <= config.maxPasses; pass++) {
     const elapsed = Date.now() - runStartedAt;
@@ -84,7 +85,11 @@ export async function runFixLoop(
       repo,
       state.branch,
       newSha,
-      getRemainingBudget(config.timeoutMs, runStartedAt),
+      {
+        timeoutMs: getRemainingBudget(config.timeoutMs, runStartedAt),
+        dispatchWorkflowId: state.workflowId,
+        dispatchOctokit: triggerOctokit,
+      },
     );
 
     if (!ciResult) {
@@ -94,6 +99,7 @@ export async function runFixLoop(
     }
 
     state.workflowRunId = ciResult.id;
+    state.workflowId = ciResult.workflowId ?? state.workflowId;
     state.headSha = ciResult.headSha;
 
     if (ciResult.conclusion === 'success') {
@@ -244,7 +250,11 @@ async function revertRegressiveCommit(
     repo,
     state.branch,
     revertSha,
-    getRemainingBudget(config.timeoutMs, runStartedAt),
+    {
+      timeoutMs: getRemainingBudget(config.timeoutMs, runStartedAt),
+      dispatchWorkflowId: state.workflowId,
+      dispatchOctokit: github.getOctokit(config.triggerToken),
+    },
   );
 
   if (!revertedRun) {
@@ -252,6 +262,7 @@ async function revertRegressiveCommit(
   }
 
   state.workflowRunId = revertedRun.id;
+  state.workflowId = revertedRun.workflowId ?? state.workflowId;
   state.headSha = revertedRun.headSha;
 
   if (revertedRun.conclusion === 'success') {

@@ -91,6 +91,7 @@ export interface GreenCheckConfig {
 
 export interface CIWorkflowRun {
   id: number;
+  workflowId: number | null;
   name: string;
   headBranch: string;
   headSha: string;
@@ -119,6 +120,7 @@ export interface FixAttempt {
 export interface RunState {
   runId: number;
   workflowRunId: number;
+  workflowId: number | null;
   workflowName: string;
   workflowUrl: string;
   branch: string;

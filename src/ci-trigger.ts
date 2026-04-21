@@ -6,6 +6,15 @@ type Octokit = ReturnType<typeof github.getOctokit>;
 type WorkflowRunApiRecord = any;
 type PullRequestApiRecord = any;
 
+interface WorkflowWaitOptions {
+  timeoutMs?: number;
+  cooldownMs?: number;
+  pollIntervalMs?: number;
+  dispatchWorkflowId?: string | number | null;
+  dispatchOctokit?: Octokit;
+  emptyPollsBeforeDispatch?: number;
+}
+
 export async function rerunFailedJobs(
   octokit: Octokit,
   owner: string,
@@ -54,15 +63,21 @@ export async function waitForWorkflowCompletion(
   repo: string,
   branch: string,
   headSha: string,
-  timeoutMs: number = 10 * 60 * 1000,
-  cooldownMs: number = 30 * 1000,
+  options: WorkflowWaitOptions = {},
 ): Promise<CIWorkflowRun | null> {
+  const timeoutMs = options.timeoutMs ?? 10 * 60 * 1000;
+  const cooldownMs = options.cooldownMs ?? 30 * 1000;
+  const pollIntervalMs = options.pollIntervalMs ?? 15_000;
+  const dispatchWorkflowId = options.dispatchWorkflowId ?? null;
+  const dispatchOctokit = options.dispatchOctokit ?? octokit;
+  const emptyPollsBeforeDispatch = Math.max(1, options.emptyPollsBeforeDispatch ?? 3);
   core.info(`Waiting for CI to complete on ${branch} (sha: ${headSha.substring(0, 7)})...`);
 
   await sleep(cooldownMs);
 
   const startedAt = Date.now();
-  const pollInterval = 15_000;
+  let emptyPolls = 0;
+  let dispatchAttempted = false;
 
   while (Date.now() - startedAt < timeoutMs) {
     try {
@@ -75,16 +90,37 @@ export async function waitForWorkflowCompletion(
 
       const runs = data.workflow_runs as WorkflowRunApiRecord[];
       if (runs.length === 0) {
-        core.info('No workflow runs found yet, waiting...');
-        await sleep(pollInterval);
+        emptyPolls += 1;
+        if (!dispatchAttempted && dispatchWorkflowId && emptyPolls >= emptyPollsBeforeDispatch) {
+          dispatchAttempted = true;
+          core.warning(
+            `No workflow runs were created for ${headSha.substring(0, 7)} after ${emptyPolls} poll(s); attempting workflow_dispatch fallback for workflow ${dispatchWorkflowId}.`,
+          );
+          const dispatched = await triggerWorkflowDispatch(
+            dispatchOctokit,
+            owner,
+            repo,
+            dispatchWorkflowId,
+            branch,
+          );
+          if (!dispatched) {
+            core.warning(
+              'Workflow dispatch fallback failed. Ensure the watched workflow declares workflow_dispatch and that trigger-token can run workflows.',
+            );
+          }
+        } else {
+          core.info('No workflow runs found yet, waiting...');
+        }
+        await sleep(pollIntervalMs);
         continue;
       }
 
+      emptyPolls = 0;
       const allCompleted = runs.every((run) => run.status === 'completed');
       if (!allCompleted) {
         const inProgress = runs.filter((run) => run.status !== 'completed');
         core.info(`${inProgress.length} workflow(s) still running...`);
-        await sleep(pollInterval);
+        await sleep(pollIntervalMs);
         continue;
       }
 
@@ -101,7 +137,7 @@ export async function waitForWorkflowCompletion(
       });
     } catch (error) {
       core.warning(`Error checking workflow status: ${error}`);
-      await sleep(pollInterval);
+      await sleep(pollIntervalMs);
     }
   }
 
@@ -144,6 +180,7 @@ export async function getLatestRunForBranch(
 function toCiWorkflowRun(run: WorkflowRunApiRecord): CIWorkflowRun {
   return {
     id: run.id,
+    workflowId: run.workflow_id ?? null,
     name: run.name || '',
     headBranch: run.head_branch || '',
     headSha: run.head_sha,

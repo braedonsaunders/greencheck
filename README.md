@@ -113,6 +113,17 @@ For Codex:
 > **Note:** Codex requires `agent-api-key`. OAuth-only Codex auth is not supported in this action.
 >
 > Leave `actions/checkout` on the default `GITHUB_TOKEN` unless you have a repo-specific reason to override it. `GREENCHECK_TOKEN` is only needed for greencheck's `trigger-token`, which pushes fixes and triggers the follow-up workflow run.
+>
+> For the most reliable follow-up verification, add `workflow_dispatch:` to the CI workflow that greencheck watches. greencheck will fall back to dispatching that workflow if a pushed fix commit does not immediately create a new GitHub Actions run.
+
+```yaml
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+    branches: [main, master]
+  workflow_dispatch:
+```
 
 A complete example workflow lives at [`examples/greencheck.workflow.yml`](examples/greencheck.workflow.yml).
 
@@ -188,7 +199,7 @@ safety:
 | `agent-api-key` | API key for the selected agent | — |
 | `agent-oauth-token` | Claude Code OAuth token (alternative to API key) | — |
 | `github-token` | GitHub token for read/report operations | **required** |
-| `trigger-token` | PAT or App token for push and rerun | **required** |
+| `trigger-token` | PAT or App token for push, rerun, and workflow_dispatch fallback | **required** |
 | `max-passes` | Max fix/verify cycles | `5` |
 | `max-cost` | Hard spend limit per run | `$3.00` |
 | `timeout` | Total runtime budget | `20m` |
@@ -244,7 +255,7 @@ The agent tried to modify files matching your `safety.never-touch-files` pattern
 greencheck hit the `max-cost` cap. Increase it in your workflow or `.greencheck.yml`, or narrow `fix-types` to reduce the number of fix attempts.
 
 **"Timed out waiting for CI"**
-The CI pipeline took longer than the remaining time budget. Increase `timeout` or optimize your CI pipeline.
+The CI pipeline took longer than the remaining time budget, or greencheck never saw a follow-up GitHub Actions run for its fix commit. Increase `timeout`, and make sure the watched CI workflow declares `workflow_dispatch:` so greencheck can trigger it explicitly if a push does not start Actions on its own.
 
 **Agent installation fails**
 greencheck auto-installs Claude Code or Codex via `npm install -g`. If this fails, pre-install the agent in a prior workflow step:
@@ -254,6 +265,9 @@ greencheck auto-installs Claude Code or Codex via `npm install -g`. If this fail
 
 **`actions/checkout` fails with "could not read Username for 'https://github.com'"**
 Do not pass `GREENCHECK_TOKEN` to the checkout step unless you specifically need it there. Let checkout use its default `GITHUB_TOKEN`, and reserve `GREENCHECK_TOKEN` for greencheck's `trigger-token` input.
+
+**greencheck pushed a fix, but no new GitHub Actions run appeared**
+Give the watched CI workflow a `workflow_dispatch:` trigger and make sure `GREENCHECK_TOKEN` has enough repo permission to dispatch workflows as a fallback.
 
 **No failures found in logs**
 greencheck still hands control to the agent and saves the raw workflow logs under `.greencheck/logs/`. Parsers are only hints now. If the agent was missing useful structure, [open an issue](https://github.com/braedonsaunders/greencheck/issues/new?template=bug_report.yml) with the log snippet and we'll add support.

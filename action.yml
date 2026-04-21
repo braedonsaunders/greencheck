@@ -20,7 +20,7 @@ inputs:
     description: 'GitHub token with actions:read and issue/PR comment write permissions'
     required: true
   trigger-token:
-    description: 'PAT or GitHub App token used for push and rerun operations'
+    description: 'PAT or GitHub App token used for push, rerun, and workflow_dispatch fallback operations'
     required: true
   max-passes:
     description: 'Maximum fix/verify cycles before giving up'

@@ -87,6 +87,7 @@ async function run(): Promise<void> {
 
     let state = getInitialState(
       failedRun.id,
+      failedRun.workflowId,
       failedRun.name,
       failedRun.htmlUrl,
       failedRun.headBranch,
@@ -96,6 +97,7 @@ async function run(): Promise<void> {
     const checkpoint = loadCheckpoint();
     if (checkpoint && shouldResumeCheckpoint(checkpoint, failedRun.id, failedRun.headBranch)) {
       state = checkpoint;
+      state.workflowId = checkpoint.workflowId ?? failedRun.workflowId ?? null;
       state.latestFailures = checkpoint.latestFailures || [];
       state.latestParserUsed = checkpoint.latestParserUsed || 'none';
       state.latestLogPath = checkpoint.latestLogPath || null;
@@ -156,6 +158,7 @@ function getWorkflowRunId(): number | null {
 
 function getInitialState(
   workflowRunId: number,
+  workflowId: number | null,
   workflowName: string,
   workflowUrl: string,
   branch: string,
@@ -165,6 +168,7 @@ function getInitialState(
   return {
     runId: Date.now(),
     workflowRunId,
+    workflowId,
     workflowName,
     workflowUrl,
     branch,

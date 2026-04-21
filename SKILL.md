@@ -95,6 +95,17 @@ jobs:
 
 Leave the checkout step on its default `GITHUB_TOKEN`. `GREENCHECK_TOKEN` is only required for `trigger-token`, where greencheck needs permission to push a fix commit and trigger the next workflow run.
 
+For the most reliable follow-up verification, add `workflow_dispatch:` to the CI workflow that greencheck watches. If a pushed fix commit does not immediately create a new Actions run, greencheck can fall back to dispatching that workflow explicitly.
+
+```yaml
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+    branches: [main, master]
+  workflow_dispatch:
+```
+
 ### Agent Selection
 
 Choose ONE of these configurations for the `uses: braedonsaunders/greencheck@v0` step:
@@ -213,7 +224,7 @@ For customizing the workflow step, these inputs are available:
 | `agent-api-key` | — | API key for the agent |
 | `agent-oauth-token` | — | Claude Code OAuth token |
 | `github-token` | — | **Required.** GitHub token for API access |
-| `trigger-token` | — | **Required.** PAT for push and rerun |
+| `trigger-token` | — | **Required.** PAT or App token for push, rerun, and workflow_dispatch fallback |
 | `max-passes` | `5` | Max fix/verify cycles |
 | `max-cost` | `$3.00` | Spend limit per run |
 | `timeout` | `20m` | Runtime budget |
@@ -255,5 +266,6 @@ greencheck parses CI logs for these formats out of the box:
 2. **Missing `fetch-depth: 0`** — Required for greencheck to operate on git history. Do not omit.
 3. **Using `GREENCHECK_TOKEN` for `actions/checkout`** — Avoid this unless you specifically need it. Let checkout use the default `GITHUB_TOKEN`; reserve `GREENCHECK_TOKEN` for greencheck's `trigger-token`.
 4. **Using `GITHUB_TOKEN` as `trigger-token`** — This won't work. `GITHUB_TOKEN` cannot trigger new workflow runs. Use a PAT.
-5. **Not scoping the PAT** — The `GREENCHECK_TOKEN` PAT needs `contents: write` and `actions: read` on the target repo. Missing permissions cause silent failures.
-6. **Protected branches** — If the target branch has branch protection rules requiring PR reviews, greencheck's direct push will be rejected. Either relax the rules for the bot or configure greencheck to work on PR branches only.
+5. **Not scoping the PAT** — The `GREENCHECK_TOKEN` PAT needs `contents: write` and `actions: write` on the target repo so greencheck can push fixes and dispatch the watched CI workflow when needed.
+6. **Missing `workflow_dispatch` on the watched CI workflow** — greencheck can now fall back to dispatching the watched workflow if a fix commit does not create a new Actions run, but that fallback only works when the workflow declares `workflow_dispatch:`.
+7. **Protected branches** — If the target branch has branch protection rules requiring PR reviews, greencheck's direct push will be rejected. Either relax the rules for the bot or configure greencheck to work on PR branches only.

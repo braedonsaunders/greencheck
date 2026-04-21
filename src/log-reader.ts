@@ -40,6 +40,7 @@ export async function getFailedWorkflowRun(
 
     return {
       id: run.id,
+      workflowId: run.workflow_id ?? null,
       name: run.name || '',
       headBranch: run.head_branch || '',
       headSha: run.head_sha,
