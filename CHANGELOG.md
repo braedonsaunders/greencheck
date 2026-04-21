@@ -4,6 +4,13 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.1.2] - 2026-04-20
+
+### Fixed
+- Updated install examples and setup guidance so `actions/checkout` uses the default `GITHUB_TOKEN`
+- Clarified that `GREENCHECK_TOKEN` should be reserved for greencheck's `trigger-token` push/rerun flow
+- Added troubleshooting guidance for checkout auth failures in `workflow_run` setups
+
 ## [0.1.1] - 2026-03-19
 
 ### Fixed

@@ -1,7 +1,7 @@
 ---
 name: greencheck-setup
 description: Install and configure greencheck — a GitHub Action that automatically fixes failed CI runs using Claude Code or Codex. Use this skill when a user wants automated CI failure remediation in their repository.
-version: 0.1.1
+version: 0.1.2
 author: Braedon Saunders
 license: MIT
 metadata:
@@ -84,7 +84,6 @@ jobs:
         with:
           ref: ${{ github.event.workflow_run.head_sha }}
           fetch-depth: 0
-          token: ${{ secrets.GREENCHECK_TOKEN }}
 
       - uses: braedonsaunders/greencheck@v0
         with:
@@ -93,6 +92,8 @@ jobs:
           github-token: ${{ secrets.GITHUB_TOKEN }}
           trigger-token: ${{ secrets.GREENCHECK_TOKEN }}
 ```
+
+Leave the checkout step on its default `GITHUB_TOKEN`. `GREENCHECK_TOKEN` is only required for `trigger-token`, where greencheck needs permission to push a fix commit and trigger the next workflow run.
 
 ### Agent Selection
 
@@ -252,6 +253,7 @@ greencheck parses CI logs for these formats out of the box:
 
 1. **Workflow name mismatch** — The `workflows:` list in `greencheck.yml` must exactly match the `name:` field in the CI workflow (case-sensitive). This is the #1 setup issue.
 2. **Missing `fetch-depth: 0`** — Required for greencheck to operate on git history. Do not omit.
-3. **Using `GITHUB_TOKEN` as `trigger-token`** — This won't work. `GITHUB_TOKEN` cannot trigger new workflow runs. Use a PAT.
-4. **Not scoping the PAT** — The `GREENCHECK_TOKEN` PAT needs `contents: write` and `actions: read` on the target repo. Missing permissions cause silent failures.
-5. **Protected branches** — If the target branch has branch protection rules requiring PR reviews, greencheck's direct push will be rejected. Either relax the rules for the bot or configure greencheck to work on PR branches only.
+3. **Using `GREENCHECK_TOKEN` for `actions/checkout`** — Avoid this unless you specifically need it. Let checkout use the default `GITHUB_TOKEN`; reserve `GREENCHECK_TOKEN` for greencheck's `trigger-token`.
+4. **Using `GITHUB_TOKEN` as `trigger-token`** — This won't work. `GITHUB_TOKEN` cannot trigger new workflow runs. Use a PAT.
+5. **Not scoping the PAT** — The `GREENCHECK_TOKEN` PAT needs `contents: write` and `actions: read` on the target repo. Missing permissions cause silent failures.
+6. **Protected branches** — If the target branch has branch protection rules requiring PR reviews, greencheck's direct push will be rejected. Either relax the rules for the bot or configure greencheck to work on PR branches only.

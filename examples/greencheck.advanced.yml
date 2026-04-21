@@ -31,7 +31,6 @@ jobs:
         with:
           ref: ${{ github.event.workflow_run.head_sha }}
           fetch-depth: 0
-          token: ${{ secrets.GREENCHECK_TOKEN }}
 
       - name: Run greencheck
         id: greencheck
@@ -49,6 +48,9 @@ jobs:
           fix-types: lint,type-error
           # Use a specific model
           model: claude-sonnet-4-20250514
+
+      # Keep GREENCHECK_TOKEN on trigger-token only.
+      # The initial checkout should use the default GITHUB_TOKEN.
 
       - name: Summary
         if: always()

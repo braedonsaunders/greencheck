@@ -79,7 +79,6 @@ jobs:
         with:
           ref: ${{ github.event.workflow_run.head_sha }}
           fetch-depth: 0
-          token: ${{ secrets.GREENCHECK_TOKEN }}
 
       - uses: braedonsaunders/greencheck@v0
         with:
@@ -112,6 +111,8 @@ For Codex:
 ```
 
 > **Note:** Codex requires `agent-api-key`. OAuth-only Codex auth is not supported in this action.
+>
+> Leave `actions/checkout` on the default `GITHUB_TOKEN` unless you have a repo-specific reason to override it. `GREENCHECK_TOKEN` is only needed for greencheck's `trigger-token`, which pushes fixes and triggers the follow-up workflow run.
 
 A complete example workflow lives at [`examples/greencheck.workflow.yml`](examples/greencheck.workflow.yml).
 
@@ -250,6 +251,9 @@ greencheck auto-installs Claude Code or Codex via `npm install -g`. If this fail
 ```yaml
 - run: npm install -g @anthropic-ai/claude-code@latest
 ```
+
+**`actions/checkout` fails with "could not read Username for 'https://github.com'"**
+Do not pass `GREENCHECK_TOKEN` to the checkout step unless you specifically need it there. Let checkout use its default `GITHUB_TOKEN`, and reserve `GREENCHECK_TOKEN` for greencheck's `trigger-token` input.
 
 **No failures found in logs**
 greencheck still hands control to the agent and saves the raw workflow logs under `.greencheck/logs/`. Parsers are only hints now. If the agent was missing useful structure, [open an issue](https://github.com/braedonsaunders/greencheck/issues/new?template=bug_report.yml) with the log snippet and we'll add support.

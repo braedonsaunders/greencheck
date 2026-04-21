@@ -36,7 +36,6 @@ jobs:
         with:
           ref: ${{ github.event.workflow_run.head_sha }}
           fetch-depth: 0
-          token: ${{ secrets.GREENCHECK_TOKEN }}
 
       # Run greencheck with Claude Code
       - name: Run greencheck
@@ -49,3 +48,6 @@ jobs:
           max-passes: 5
           max-cost: "$3.00"
           timeout: 20m
+
+      # Keep GREENCHECK_TOKEN on trigger-token only.
+      # The initial checkout should use the default GITHUB_TOKEN.
