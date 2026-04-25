@@ -34,7 +34,7 @@ Before starting, confirm the following with the user or by inspecting the repo:
 
 1. **The repo is on GitHub** with GitHub Actions enabled
 2. **An existing CI workflow exists** in `.github/workflows/` that runs tests, lint, typecheck, or build
-3. **The user has or can create** a GitHub PAT (fine-grained) with `contents: write` and `actions: read` scopes
+3. **The repository allows GitHub Actions write permissions**, or the user can provide a PAT/App token with `contents: write` and `actions: write`
 4. **The user has** an Anthropic API key or OpenAI API key
 
 ## Step 1: Identify the CI Workflow Name
@@ -66,7 +66,7 @@ on:
     types: [completed]
 
 permissions:
-  actions: read
+  actions: write
   contents: write
   issues: write
   pull-requests: write
@@ -84,16 +84,17 @@ jobs:
         with:
           ref: ${{ github.event.workflow_run.head_sha }}
           fetch-depth: 0
+          persist-credentials: false
 
       - uses: braedonsaunders/greencheck@v0
         with:
           agent: claude
           agent-api-key: ${{ secrets.ANTHROPIC_API_KEY }}
           github-token: ${{ secrets.GITHUB_TOKEN }}
-          trigger-token: ${{ secrets.GREENCHECK_TOKEN }}
+          trigger-token: ${{ github.token }}
 ```
 
-Leave the checkout step on its default `GITHUB_TOKEN`. `GREENCHECK_TOKEN` is only required for `trigger-token`, where greencheck needs permission to push a fix commit and trigger the next workflow run.
+Use `persist-credentials: false` on checkout so greencheck controls push authentication. In most repositories, `${{ github.token }}` is enough for `trigger-token` when the greencheck workflow grants `actions: write` and the watched CI workflow declares `workflow_dispatch:`.
 
 For the most reliable follow-up verification, add `workflow_dispatch:` to the CI workflow that greencheck watches. If a pushed fix commit does not immediately create a new Actions run, greencheck can fall back to dispatching that workflow explicitly.
 
@@ -196,11 +197,10 @@ After pushing, inform the user they need to add these secrets in their GitHub re
 
 | Secret Name | Value | How to Get It |
 |-------------|-------|---------------|
-| `GREENCHECK_TOKEN` | GitHub PAT (fine-grained) | github.com → Settings → Developer settings → Fine-grained tokens → Generate. Scope to this repo with `contents: write` and `actions: read`. |
 | `ANTHROPIC_API_KEY` | Anthropic API key | console.anthropic.com → API Keys (only if using Claude) |
 | `OPENAI_API_KEY` | OpenAI API key | platform.openai.com → API Keys (only if using Codex) |
 
-**`GITHUB_TOKEN` is automatic** — do not ask the user to create it.
+**`GITHUB_TOKEN` is automatic** — do not ask the user to create it. A separate `GREENCHECK_TOKEN` PAT/App token is optional and usually unnecessary when using `${{ github.token }}` with `actions: write`.
 
 ## Step 6: Verify the Setup
 
@@ -224,7 +224,7 @@ For customizing the workflow step, these inputs are available:
 | `agent-api-key` | — | API key for the agent |
 | `agent-oauth-token` | — | Claude Code OAuth token |
 | `github-token` | — | **Required.** GitHub token for API access |
-| `trigger-token` | — | **Required.** PAT or App token for push, rerun, and workflow_dispatch fallback |
+| `trigger-token` | — | **Required.** Token for push and workflow_dispatch fallback. Use `${{ github.token }}` with `actions: write`, or a PAT/App token. |
 | `max-passes` | `5` | Max fix/verify cycles |
 | `max-cost` | `$3.00` | Spend limit per run |
 | `timeout` | `20m` | Runtime budget |
@@ -264,8 +264,8 @@ greencheck parses CI logs for these formats out of the box:
 
 1. **Workflow name mismatch** — The `workflows:` list in `greencheck.yml` must exactly match the `name:` field in the CI workflow (case-sensitive). This is the #1 setup issue.
 2. **Missing `fetch-depth: 0`** — Required for greencheck to operate on git history. Do not omit.
-3. **Using `GREENCHECK_TOKEN` for `actions/checkout`** — Avoid this unless you specifically need it. Let checkout use the default `GITHUB_TOKEN`; reserve `GREENCHECK_TOKEN` for greencheck's `trigger-token`.
-4. **Using `GITHUB_TOKEN` as `trigger-token`** — This won't work. `GITHUB_TOKEN` cannot trigger new workflow runs. Use a PAT.
-5. **Not scoping the PAT** — The `GREENCHECK_TOKEN` PAT needs `contents: write` and `actions: write` on the target repo so greencheck can push fixes and dispatch the watched CI workflow when needed.
+3. **Letting checkout persist credentials** — Use `persist-credentials: false` so greencheck's `trigger-token` controls fix pushes.
+4. **Missing `actions: write`** — `${{ github.token }}` needs workflow-level `actions: write` so greencheck can dispatch the watched CI workflow.
+5. **Not scoping a PAT** — If you use a separate PAT/App token, it needs `contents: write` and `actions: write` on the target repo.
 6. **Missing `workflow_dispatch` on the watched CI workflow** — greencheck can now fall back to dispatching the watched workflow if a fix commit does not create a new Actions run, but that fallback only works when the workflow declares `workflow_dispatch:`.
 7. **Protected branches** — If the target branch has branch protection rules requiring PR reviews, greencheck's direct push will be rejected. Either relax the rules for the bot or configure greencheck to work on PR branches only.

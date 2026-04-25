@@ -1,6 +1,6 @@
 {
   "name": "greencheck",
-  "version": "0.1.4",
+  "version": "0.1.5",
   "description": "GitHub Action that autonomously fixes CI failures using LLM-powered coding agents",
   "main": "dist/index.js",
   "engines": {
