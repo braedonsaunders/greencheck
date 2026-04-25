@@ -257,6 +257,9 @@ greencheck hit the `max-cost` cap. Increase it in your workflow or `.greencheck.
 **"Timed out waiting for CI"**
 The CI pipeline took longer than the remaining time budget, or greencheck never saw a follow-up GitHub Actions run for its fix commit. Increase `timeout`, and make sure the watched CI workflow declares `workflow_dispatch:` so greencheck can trigger it explicitly if a push does not start Actions on its own.
 
+**"Bad credentials" while dispatching the watched workflow**
+`trigger-token` is invalid, expired, or not authorized for the target repository. Recreate `GREENCHECK_TOKEN` with enough permission to push contents and dispatch Actions workflows. greencheck temporarily clears checkout's persisted `GITHUB_TOKEN` credentials before pushing so this token is the one GitHub evaluates.
+
 **Agent installation fails**
 greencheck auto-installs Claude Code or Codex via `npm install -g`. If this fails, pre-install the agent in a prior workflow step:
 ```yaml

@@ -107,6 +107,10 @@ export async function waitForWorkflowCompletion(
             core.warning(
               'Workflow dispatch fallback failed. Ensure the watched workflow declares workflow_dispatch and that trigger-token can run workflows.',
             );
+            core.warning(
+              `No workflow run exists for ${headSha.substring(0, 7)} and the fallback dispatch could not be started; stopping CI wait early.`,
+            );
+            return null;
           }
         } else {
           core.info('No workflow runs found yet, waiting...');

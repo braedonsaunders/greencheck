@@ -39181,6 +39181,8 @@ async function waitForWorkflowCompletion(octokit, owner, repo, branch, headSha, 
                     const dispatched = await triggerWorkflowDispatch(dispatchOctokit, owner, repo, dispatchWorkflowId, branch);
                     if (!dispatched) {
                         core.warning('Workflow dispatch fallback failed. Ensure the watched workflow declares workflow_dispatch and that trigger-token can run workflows.');
+                        core.warning(`No workflow run exists for ${headSha.substring(0, 7)} and the fallback dispatch could not be started; stopping CI wait early.`);
+                        return null;
                     }
                 }
                 else {
@@ -39568,6 +39570,7 @@ exports.getCurrentSha = getCurrentSha;
 const core = __importStar(__nccwpck_require__(7484));
 const exec = __importStar(__nccwpck_require__(5236));
 const glob_1 = __nccwpck_require__(5601);
+const ACTIONS_CHECKOUT_EXTRAHEADER_KEY = 'http.https://github.com/.extraheader';
 async function git(args, cwd) {
     let stdout = '';
     let stderr = '';
@@ -39756,12 +39759,23 @@ function formatAgentSummary(agentSummary) {
 }
 async function pushChanges(branch, token, owner, repo, cwd) {
     const originalRemote = await git(['remote', 'get-url', 'origin'], cwd);
+    const checkoutExtraheaders = await getLocalConfigValues(ACTIONS_CHECKOUT_EXTRAHEADER_KEY, cwd);
     const remoteUrl = `https://x-access-token:${token}@github.com/${owner}/${repo}.git`;
+    let clearedCheckoutExtraheaders = false;
     try {
         const setUrlResult = await git(['remote', 'set-url', 'origin', remoteUrl], cwd);
         if (setUrlResult.exitCode !== 0) {
             core.error(`Failed to update origin remote: ${setUrlResult.stderr}`);
             return false;
+        }
+        if (checkoutExtraheaders.length > 0) {
+            core.info('Temporarily clearing actions/checkout credentials so trigger-token is used for push');
+            const clearResult = await git(['config', '--local', '--unset-all', ACTIONS_CHECKOUT_EXTRAHEADER_KEY], cwd);
+            if (clearResult.exitCode !== 0) {
+                core.error(`Failed to clear actions/checkout credentials before push: ${clearResult.stderr}`);
+                return false;
+            }
+            clearedCheckoutExtraheaders = true;
         }
         const pushResult = await git(['push', 'origin', `HEAD:${branch}`], cwd);
         if (pushResult.exitCode !== 0) {
@@ -39774,6 +39788,24 @@ async function pushChanges(branch, token, owner, repo, cwd) {
     finally {
         if (originalRemote.exitCode === 0 && originalRemote.stdout) {
             await git(['remote', 'set-url', 'origin', originalRemote.stdout], cwd);
+        }
+        if (clearedCheckoutExtraheaders) {
+            await restoreLocalConfigValues(ACTIONS_CHECKOUT_EXTRAHEADER_KEY, checkoutExtraheaders, cwd);
+        }
+    }
+}
+async function getLocalConfigValues(key, cwd) {
+    const result = await git(['config', '--local', '--get-all', key], cwd);
+    if (result.exitCode !== 0 || !result.stdout) {
+        return [];
+    }
+    return result.stdout.split('\n').filter(Boolean);
+}
+async function restoreLocalConfigValues(key, values, cwd) {
+    for (const value of values) {
+        const result = await git(['config', '--local', '--add', key, value], cwd);
+        if (result.exitCode !== 0) {
+            core.warning(`Failed to restore local git config ${key}: ${result.stderr}`);
         }
     }
 }

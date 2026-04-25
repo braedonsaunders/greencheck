@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.1.4] - 2026-04-25
+
+### Fixed
+- Ensure fix pushes use `trigger-token` instead of checkout's persisted `GITHUB_TOKEN` credentials
+- Stop waiting for the full timeout when no follow-up workflow run exists and the dispatch fallback fails
+
 ## [0.1.3] - 2026-04-20
 
 ### Fixed

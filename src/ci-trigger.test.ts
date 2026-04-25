@@ -17,7 +17,10 @@ function createRun(overrides: Record<string, unknown> = {}): Record<string, unkn
   };
 }
 
-function createOctokit(runResponses: Array<Record<string, unknown>[]>) {
+function createOctokit(
+  runResponses: Array<Record<string, unknown>[]>,
+  dispatchImplementation: () => Promise<void> = async () => undefined,
+) {
   let index = 0;
 
   return {
@@ -28,7 +31,7 @@ function createOctokit(runResponses: Array<Record<string, unknown>[]>) {
             workflow_runs: runResponses[Math.min(index++, runResponses.length - 1)] || [],
           },
         })),
-        createWorkflowDispatch: vi.fn(async () => undefined),
+        createWorkflowDispatch: vi.fn(dispatchImplementation),
       },
     },
   };
@@ -95,5 +98,36 @@ describe('waitForWorkflowCompletion', () => {
     expect(triggerOctokit.rest.actions.createWorkflowDispatch).not.toHaveBeenCalled();
     expect(result?.id).toBe(202);
     expect(result?.conclusion).toBe('failure');
+  });
+
+  it('stops waiting early when the dispatch fallback cannot start a run', async () => {
+    const readOctokit = createOctokit([
+      [],
+      [],
+      [],
+    ]);
+    const triggerOctokit = createOctokit([], async () => {
+      throw new Error('Bad credentials');
+    });
+
+    const result = await waitForWorkflowCompletion(
+      readOctokit as never,
+      'owner',
+      'repo',
+      'main',
+      'abc123def456',
+      {
+        timeoutMs: 50,
+        cooldownMs: 0,
+        pollIntervalMs: 0,
+        dispatchWorkflowId: 230872278,
+        dispatchOctokit: triggerOctokit as never,
+        emptyPollsBeforeDispatch: 2,
+      },
+    );
+
+    expect(result).toBeNull();
+    expect(readOctokit.rest.actions.listWorkflowRunsForRepo).toHaveBeenCalledTimes(2);
+    expect(triggerOctokit.rest.actions.createWorkflowDispatch).toHaveBeenCalledOnce();
   });
 });
